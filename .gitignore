@@ -18,11 +18,13 @@ profile.cov
 *.pem
 *.crt
 *.cer
+*.csr
 *.p12
 *.pfx
 data/
 certs/
 out/
+client/
 
 # Go workspace
 go.work
