@@ -4,9 +4,9 @@ A Go-based local PKI and certificate authority lab for learning and testing cert
 
 > This repository is for local research and testing. Do not use generated CA private keys in production.
 
-## Milestone 1: local certificate chain
+## Implemented
 
-The current version implements:
+### Phase 1: local certificate chain
 
 - Self-signed Root CA
 - Intermediate CA signed by the Root CA
@@ -14,9 +14,48 @@ The current version implements:
 - SAN (`DNSNames`) for the requested domain
 - `fullchain.pem` containing leaf + intermediate certificates
 - Local chain verification with Go `crypto/x509`
-- Private keys written with restrictive file permissions
 
-The next milestone will add a local DNS server and DNS-01 style TXT challenge before certificate issuance.
+### Phase 2: local DNS-01 validation
+
+- Certificate Order with `pending -> ready -> valid` states
+- Random DNS-01 challenge token generation
+- Local authoritative UDP DNS server
+- In-memory TXT record store
+- Real DNS TXT lookup through `github.com/miekg/dns`
+- Certificate issuance only after DNS-01 validation succeeds
+- Tests proving validation fails without the TXT record and succeeds after publication
+
+The Phase 2 CLI automatically publishes the generated TXT record into the local DNS store so the complete flow can be demonstrated in one command. A later API phase will separate the CA from the DNS client so the user explicitly publishes the challenge.
+
+## Flow
+
+```text
+Certificate Order
+      |
+      v
+status = pending
+      |
+      v
+Generate DNS-01 Challenge
+      |
+      v
+_acme-challenge.hello.test TXT <token>
+      |
+      v
+Local UDP DNS Server :1053
+      |
+      v
+DNS TXT Query / Validation
+      |
+      v
+status = ready
+      |
+      v
+Intermediate CA issues leaf certificate
+      |
+      v
+status = valid
+```
 
 ## Certificate chain
 
@@ -35,14 +74,32 @@ hello.test
 Requirements: Go 1.23+.
 
 ```bash
+go mod tidy
+go test ./...
 go run ./cmd/pki-server -domain hello.test -out ./out
 ```
 
-Expected output:
+The local DNS server listens on `127.0.0.1:1053` by default. Override it with:
+
+```bash
+go run ./cmd/pki-server \
+  -domain hello.test \
+  -dns-addr 127.0.0.1:2053 \
+  -out ./out
+```
+
+Expected flow:
 
 ```text
-certificate issued successfully
+certificate order created
 domain: hello.test
+order status: pending
+DNS-01 record: _acme-challenge.hello.test TXT "<random-token>"
+local DNS server: 127.0.0.1:1053
+DNS-01 validation: OK
+order status: ready
+certificate issued successfully
+order status: valid
 output: ./out
 chain verification: OK
 ```
@@ -60,25 +117,9 @@ out/
 └── fullchain.pem
 ```
 
-`fullchain.pem` contains:
+`fullchain.pem` contains the leaf certificate followed by the intermediate CA certificate. The Root CA is intentionally not included in the TLS full chain; it is installed separately into the local trust store when testing browser trust.
 
-```text
-hello.test certificate
-        +
-intermediate CA certificate
-```
-
-The Root CA is intentionally not included in the TLS full chain; it is installed separately into the local trust store when testing browser trust.
-
-## Inspect the certificates
-
-```bash
-openssl x509 -in out/root-ca.crt -text -noout
-openssl x509 -in out/intermediate-ca.crt -text -noout
-openssl x509 -in out/hello.test.crt -text -noout
-```
-
-Verify with OpenSSL:
+## Verify with OpenSSL
 
 ```bash
 openssl verify \
@@ -89,20 +130,16 @@ openssl verify \
 
 ## Security
 
-Generated PKI material is ignored by Git. In particular, never commit:
-
-- Root CA private keys
-- Intermediate CA private keys
-- Leaf private keys
-- Runtime certificate output directories
+Generated PKI material is ignored by Git. Never commit Root CA, Intermediate CA, or leaf private keys.
 
 ## Roadmap
 
 ```text
-Phase 1  Root CA -> Intermediate CA -> Leaf -> x509.Verify
-Phase 2  Local DNS server + TXT records + DNS-01 challenge
-Phase 3  Certificate Order API and issuance state machine
-Phase 4  Local HTTPS server and browser trust walkthrough
-Phase 5  Renewal, revocation, CRL and OCSP experiments
-Phase 6  ACME-compatible workflow experiments
+Phase 1  [done] Root CA -> Intermediate CA -> Leaf -> x509.Verify
+Phase 2  [done] Local DNS server + TXT records + DNS-01 challenge
+Phase 3  Certificate Order HTTP API + explicit challenge publication
+Phase 4  Local HTTPS server + hosts mapping + browser trust walkthrough
+Phase 5  Persistent CA/order storage and certificate lifecycle
+Phase 6  Renewal, revocation, CRL and OCSP experiments
+Phase 7  ACME-compatible workflow experiments
 ```
