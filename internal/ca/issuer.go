@@ -12,10 +12,10 @@ import (
 )
 
 type IssuedCertificate struct {
-	Certificate *x509.Certificate
-	PrivateKey  *rsa.PrivateKey
-	CertPEM     []byte
-	KeyPEM      []byte
+	Certificate  *x509.Certificate
+	PrivateKey   *rsa.PrivateKey
+	CertPEM      []byte
+	KeyPEM       []byte
 	FullChainPEM []byte
 }
 
@@ -73,10 +73,10 @@ func IssueServerCertificate(intermediate *Authority, domain string, validity tim
 	fullChain := append(append([]byte{}, certPEM...), intermediate.CertPEM...)
 
 	return &IssuedCertificate{
-		Certificate: cert,
-		PrivateKey:  key,
-		CertPEM:     certPEM,
-		KeyPEM:      keyPEM,
+		Certificate:  cert,
+		PrivateKey:   key,
+		CertPEM:      certPEM,
+		KeyPEM:       keyPEM,
 		FullChainPEM: fullChain,
 	}, nil
 }
