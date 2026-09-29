@@ -32,10 +32,19 @@ A Go-based local PKI and certificate authority lab for learning and testing cert
 - `POST /orders/{id}/validate` performs a real DNS TXT lookup
 - `POST /orders/{id}/issue` issues only a `ready` order
 - `GET /orders/{id}` returns order state
-- `GET /ca/root` exposes the local Root CA certificate for later browser-trust experiments
+- `GET /ca/root` exposes the local Root CA certificate
 - End-to-end API test covering create -> TXT -> validate -> issue
 
 Phase 3 is still a lab workflow: the CA currently generates the leaf private key and returns it in the issuance response. A later CSR phase will move private-key generation to the client, matching real-world CA behavior more closely.
+
+### Phase 4: local trusted HTTPS
+
+- Local HTTPS server using the issued `fullchain.pem` and leaf private key
+- TLS 1.2+ configuration
+- Browser-test page and `/healthz` endpoint
+- Test proving Go TLS loads leaf + intermediate from `fullchain.pem`
+- Local hosts mapping walkthrough
+- Root CA trust-store walkthrough for macOS, Linux and Windows
 
 ## Architecture
 
@@ -63,22 +72,25 @@ Phase 3 is still a lab workflow: the CA currently generates the leaf private key
    Intermediate CA
           |
           v
-   Leaf Certificate
+   Leaf Certificate + Full Chain
           |
           v
-     status = valid
+     Local HTTPS Server :8443
+          |
+          v
+      Browser / TLS Client
 ```
 
 ## Certificate chain
 
 ```text
-Go PKI Lab Root CA
+Go PKI Lab Root CA              <- installed in local trust store
         |
         v
-Go PKI Lab Intermediate CA
+Go PKI Lab Intermediate CA      <- sent by HTTPS server
         |
         v
-hello.test
+hello.test                      <- sent by HTTPS server
 ```
 
 ## Requirements
@@ -136,8 +148,6 @@ Example response:
 }
 ```
 
-Save the returned `id`, challenge `name`, and challenge `value` for the next steps.
-
 ### 2. Publish the TXT record
 
 ```bash
@@ -149,13 +159,13 @@ curl -s -X POST http://127.0.0.1:8080/dns/txt \
   }'
 ```
 
-You can inspect the record through the API:
+Inspect the record through the API:
 
 ```bash
 curl -s 'http://127.0.0.1:8080/dns/txt?name=_acme-challenge.hello.test'
 ```
 
-Or query the real local DNS server directly:
+Or query the local DNS server directly:
 
 ```bash
 dig @127.0.0.1 -p 1053 TXT _acme-challenge.hello.test
@@ -167,15 +177,7 @@ dig @127.0.0.1 -p 1053 TXT _acme-challenge.hello.test
 curl -s -X POST http://127.0.0.1:8080/orders/<order-id>/validate
 ```
 
-The order should become:
-
-```json
-{
-  "status": "ready"
-}
-```
-
-If the TXT record is missing or incorrect, validation returns HTTP `422` and the certificate is not issued.
+The order should become `ready`. If the TXT record is missing or incorrect, validation returns HTTP `422` and the certificate is not issued.
 
 ### 4. Issue the certificate
 
@@ -183,38 +185,25 @@ If the TXT record is missing or incorrect, validation returns HTTP `422` and the
 curl -s -X POST http://127.0.0.1:8080/orders/<order-id>/issue
 ```
 
-The response contains:
+The response contains `certificate_pem`, `private_key_pem`, and `fullchain_pem`. Issuance before successful DNS validation returns HTTP `409`.
 
-```json
-{
-  "status": "valid",
-  "certificate": {
-    "certificate_pem": "-----BEGIN CERTIFICATE-----...",
-    "private_key_pem": "-----BEGIN PRIVATE KEY-----...",
-    "fullchain_pem": "-----BEGIN CERTIFICATE-----..."
-  }
-}
-```
-
-Issuance before successful DNS validation returns HTTP `409`.
-
-### 5. Inspect the order
-
-```bash
-curl -s http://127.0.0.1:8080/orders/<order-id>
-```
-
-### 6. Download the Root CA
+### 5. Download the Root CA
 
 ```bash
 curl -s http://127.0.0.1:8080/ca/root -o root-ca.crt
 ```
 
-This certificate will be used in Phase 4 to make the local browser trust certificates issued by the lab CA.
+## Phase 4: trusted browser HTTPS demo
 
-## Phase 2 generated files
+The simplest Phase 4 path is to use the files produced by `cmd/pki-server`.
 
-Running `cmd/pki-server` generates:
+### 1. Generate the certificate chain
+
+```bash
+go run ./cmd/pki-server -domain hello.test -out ./out
+```
+
+Generated files:
 
 ```text
 out/
@@ -227,9 +216,149 @@ out/
 └── fullchain.pem
 ```
 
-`fullchain.pem` contains the leaf certificate followed by the intermediate CA certificate. The Root CA is intentionally not included in the TLS full chain; it is installed separately into the local trust store.
+`fullchain.pem` contains the leaf certificate followed by the intermediate CA certificate. The Root CA is intentionally not included in the TLS full chain because it belongs in the client's trust store.
 
-## Verify with OpenSSL
+### 2. Map the test domain to localhost
+
+Add this line to your hosts file:
+
+```text
+127.0.0.1 hello.test
+```
+
+macOS / Linux:
+
+```bash
+sudo sh -c 'echo "127.0.0.1 hello.test" >> /etc/hosts'
+```
+
+Windows: edit `C:\Windows\System32\drivers\etc\hosts` as Administrator and add the same line.
+
+Confirm:
+
+```bash
+ping hello.test
+```
+
+It should resolve to `127.0.0.1`.
+
+### 3. Start the HTTPS server
+
+```bash
+go run ./cmd/https-server \
+  -domain hello.test \
+  -addr 127.0.0.1:8443 \
+  -cert ./out/fullchain.pem \
+  -key ./out/hello.test.key
+```
+
+Then test the TLS endpoint before trusting the Root CA:
+
+```bash
+curl --cacert ./out/root-ca.crt https://hello.test:8443/
+```
+
+You can also inspect the chain sent by the server:
+
+```bash
+openssl s_client \
+  -connect hello.test:8443 \
+  -servername hello.test \
+  -CAfile ./out/root-ca.crt \
+  -verify_return_error
+```
+
+The verification result should be `Verify return code: 0 (ok)`.
+
+### 4. Trust the lab Root CA
+
+Only trust this CA on a development machine. The holder of `root-ca.key` can issue certificates your machine will trust.
+
+#### macOS
+
+Install the Root CA into the System keychain as a trusted root:
+
+```bash
+sudo security add-trusted-cert \
+  -d \
+  -r trustRoot \
+  -k /Library/Keychains/System.keychain \
+  ./out/root-ca.crt
+```
+
+You can also import `out/root-ca.crt` with Keychain Access and set **Trust -> When using this certificate -> Always Trust**.
+
+To remove the test Root CA later:
+
+```bash
+sudo security delete-certificate \
+  -c "Go PKI Lab Root CA" \
+  /Library/Keychains/System.keychain
+```
+
+#### Debian / Ubuntu Linux
+
+```bash
+sudo cp ./out/root-ca.crt /usr/local/share/ca-certificates/go-pki-lab-root.crt
+sudo update-ca-certificates
+```
+
+To remove it:
+
+```bash
+sudo rm /usr/local/share/ca-certificates/go-pki-lab-root.crt
+sudo update-ca-certificates --fresh
+```
+
+#### Windows
+
+Run an Administrator terminal:
+
+```powershell
+certutil -addstore -f Root .\out\root-ca.crt
+```
+
+Remove it later with the Certificates MMC (`certmgr.msc` / `certlm.msc`) or `certutil`.
+
+### 5. Open the browser
+
+Open:
+
+```text
+https://hello.test:8443/
+```
+
+The page should load without a certificate warning once all of the following are true:
+
+```text
+hello.test -> 127.0.0.1
+       +
+Leaf SAN contains hello.test
+       +
+HTTPS server sends leaf + intermediate
+       +
+Local trust store trusts Go PKI Lab Root CA
+       =
+Trusted HTTPS connection
+```
+
+Modern browsers do not necessarily display a green lock icon anymore; browser UI has changed over time. The important result is that the page opens normally with no certificate/privacy warning and the certificate viewer shows a valid chain to `Go PKI Lab Root CA`.
+
+### Optional: use the standard HTTPS port
+
+Port `8443` avoids privileged-port requirements. If you specifically want `https://hello.test/` without a port number, run the server on port `443` using an appropriate local privilege/port-forwarding setup:
+
+```bash
+go run ./cmd/https-server \
+  -domain hello.test \
+  -addr 127.0.0.1:443 \
+  -cert ./out/fullchain.pem \
+  -key ./out/hello.test.key
+```
+
+Avoid running more of your development environment as root than necessary.
+
+## Verify certificate files with OpenSSL
 
 ```bash
 openssl verify \
@@ -244,13 +373,15 @@ Generated PKI material is ignored by Git. Never commit Root CA, Intermediate CA,
 
 The API implementation is intentionally local and educational. It currently has no authentication, authorization, persistent database, rate limiting, audit log, HSM/KMS integration, or production-grade key protection.
 
+Installing the lab Root CA into an operating-system trust store gives that CA broad trust on the local machine. Remove it after experiments if you no longer need it, and never distribute `root-ca.key`.
+
 ## Roadmap
 
 ```text
 Phase 1  [done] Root CA -> Intermediate CA -> Leaf -> x509.Verify
 Phase 2  [done] Local DNS server + TXT records + DNS-01 challenge
 Phase 3  [done] Certificate Order HTTP API + explicit challenge publication
-Phase 4  Local HTTPS server + hosts mapping + browser trust walkthrough
+Phase 4  [done] Local HTTPS server + hosts mapping + browser trust walkthrough
 Phase 5  CSR workflow: client-generated private keys and CSRs
 Phase 6  Persistent CA/order storage and certificate lifecycle
 Phase 7  Renewal, revocation, CRL and OCSP experiments
