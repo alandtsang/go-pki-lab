@@ -31,16 +31,19 @@ func NewFileRepository(dir string) (*FileRepository, error) {
 }
 
 type record struct {
-	ID            string       `json:"id"`
-	Domain        string       `json:"domain"`
-	Status        order.Status `json:"status"`
-	ChallengeName string       `json:"challenge_name"`
-	ChallengeToken string      `json:"challenge_token"`
-	CSRPEM        string       `json:"csr_pem"`
-	CertificatePEM string      `json:"certificate_pem,omitempty"`
-	FullChainPEM  string       `json:"fullchain_pem,omitempty"`
-	CreatedAt     time.Time    `json:"created_at"`
-	UpdatedAt     time.Time    `json:"updated_at"`
+	ID               string       `json:"id"`
+	Domain           string       `json:"domain"`
+	Status           order.Status `json:"status"`
+	ChallengeName    string       `json:"challenge_name"`
+	ChallengeToken   string       `json:"challenge_token"`
+	CSRPEM           string       `json:"csr_pem"`
+	CertificatePEM   string       `json:"certificate_pem,omitempty"`
+	FullChainPEM     string       `json:"fullchain_pem,omitempty"`
+	CreatedAt        time.Time    `json:"created_at"`
+	UpdatedAt        time.Time    `json:"updated_at"`
+	RevokedAt        *time.Time   `json:"revoked_at,omitempty"`
+	RevocationReason int          `json:"revocation_reason,omitempty"`
+	RenewedFrom      string       `json:"renewed_from,omitempty"`
 }
 
 func (r *FileRepository) Save(entry *platform.Entry) error {
@@ -51,6 +54,7 @@ func (r *FileRepository) Save(entry *platform.Entry) error {
 		ID: entry.ID, Domain: entry.Order.Domain, Status: entry.Order.Status,
 		ChallengeName: entry.Order.Challenge.Name, ChallengeToken: entry.Order.Challenge.Token,
 		CSRPEM: string(entry.CSRPEM), CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt,
+		RevokedAt: entry.RevokedAt, RevocationReason: entry.RevocationReason, RenewedFrom: entry.RenewedFrom,
 	}
 	if entry.Certificate != nil {
 		rec.CertificatePEM = string(entry.Certificate.CertPEM)
@@ -94,6 +98,7 @@ func (r *FileRepository) LoadAll() ([]*platform.Entry, error) {
 			ID: rec.ID,
 			Order: &order.Order{Domain: rec.Domain, Status: rec.Status, Challenge: &challenge.DNS01{Domain: rec.Domain, Name: rec.ChallengeName, Token: rec.ChallengeToken}},
 			CSR: req, CSRPEM: []byte(rec.CSRPEM), CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt,
+			RevokedAt: rec.RevokedAt, RevocationReason: rec.RevocationReason, RenewedFrom: rec.RenewedFrom,
 		}
 		if rec.CertificatePEM != "" {
 			block, _ := pem.Decode([]byte(rec.CertificatePEM))
