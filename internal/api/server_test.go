@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/alandtsang/go-pki-lab/internal/ca"
+	"github.com/alandtsang/go-pki-lab/internal/csr"
 	localdns "github.com/alandtsang/go-pki-lab/internal/dns"
 	"github.com/alandtsang/go-pki-lab/internal/platform"
 )
@@ -42,7 +43,15 @@ func TestOrderAPIFlow(t *testing.T) {
 	httpServer := httptest.NewServer(apiServer.Handler())
 	defer httpServer.Close()
 
-	create := doJSON(t, http.MethodPost, httpServer.URL+"/orders", map[string]any{"domain": "hello.test"})
+	clientCSR, err := csr.Generate("hello.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	create := doJSON(t, http.MethodPost, httpServer.URL+"/orders", map[string]any{
+		"domain":  "hello.test",
+		"csr_pem": string(clientCSR.CSRPEM),
+	})
 	if create.StatusCode != http.StatusCreated {
 		t.Fatalf("create order status = %d, body = %s", create.StatusCode, create.Body)
 	}
@@ -79,9 +88,38 @@ func TestOrderAPIFlow(t *testing.T) {
 		t.Fatalf("issue status = %d, body = %s", issue.StatusCode, issue.Body)
 	}
 	if !bytes.Contains(issue.Body, []byte(`"status":"valid"`)) ||
-		!bytes.Contains(issue.Body, []byte("BEGIN CERTIFICATE")) ||
-		!bytes.Contains(issue.Body, []byte("BEGIN PRIVATE KEY")) {
+		!bytes.Contains(issue.Body, []byte("BEGIN CERTIFICATE")) {
 		t.Fatalf("unexpected issuance response: %s", issue.Body)
+	}
+	if bytes.Contains(issue.Body, []byte("BEGIN PRIVATE KEY")) || bytes.Contains(issue.Body, []byte("private_key_pem")) {
+		t.Fatalf("CA response must not contain client private key: %s", issue.Body)
+	}
+}
+
+func TestCreateOrderRejectsCSRDomainMismatch(t *testing.T) {
+	root, _ := ca.NewRoot("Test Root CA", 24*time.Hour)
+	intermediate, _ := ca.NewIntermediate(root, "Test Intermediate CA", 12*time.Hour)
+	store := localdns.NewStore()
+	dnsServer, err := localdns.StartLocalServer("127.0.0.1:0", store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dnsServer.Shutdown()
+	service, _ := platform.NewService(root, intermediate, dnsServer.Addr())
+	apiServer, _ := NewServer(service, store, root.CertPEM)
+	httpServer := httptest.NewServer(apiServer.Handler())
+	defer httpServer.Close()
+
+	clientCSR, err := csr.Generate("hello.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := doJSON(t, http.MethodPost, httpServer.URL+"/orders", map[string]any{
+		"domain":  "other.test",
+		"csr_pem": string(clientCSR.CSRPEM),
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for CSR/domain mismatch, got %d body=%s", resp.StatusCode, resp.Body)
 	}
 }
 
