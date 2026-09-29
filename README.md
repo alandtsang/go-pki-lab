@@ -99,6 +99,65 @@ go mod tidy
 go test ./...
 ```
 
+## Important: where `root-ca.crt` comes from
+
+`cmd/csr-client` does **not** generate `root-ca.crt`.
+
+The Root CA is created by the certificate platform process when `cmd/api-server` starts. The API exposes the corresponding Root CA certificate at:
+
+```text
+GET /ca/root
+```
+
+Download it with:
+
+```bash
+curl -s http://127.0.0.1:8080/ca/root \
+  -o ./client/root-ca.crt
+```
+
+So the Phase 5 files come from different places:
+
+```text
+client/
+├── hello.test.key       <- generated locally by csr-client
+├── hello.test.csr       <- generated locally by csr-client
+├── hello.test.crt       <- returned by POST /orders/{id}/issue
+├── fullchain.pem        <- returned by POST /orders/{id}/issue
+├── root-ca.crt          <- downloaded from GET /ca/root
+└── issue-response.json  <- saved issuance API response
+```
+
+### Current limitation: Root CA is not persistent yet
+
+At the current stage, `cmd/api-server` generates a new Root CA and Intermediate CA every time the process starts.
+
+That means:
+
+```text
+start api-server
+    |
+    +--> Root CA A
+    |
+    +--> issue hello.test certificate signed by Root CA A
+
+restart api-server
+    |
+    +--> Root CA B
+```
+
+A certificate issued under **Root CA A** will not validate against **Root CA B**.
+
+Therefore, for the current Phase 5 demo:
+
+1. Start `cmd/api-server`.
+2. Keep that same process running while creating the order, validating DNS-01 and issuing the certificate.
+3. Download `root-ca.crt` from that same running process.
+4. Use that downloaded Root CA to verify the issued certificate.
+5. If you restart `cmd/api-server`, previously issued certificates belong to the old CA instance.
+
+Persistent Root/Intermediate CA storage is planned for Phase 6.
+
 ## Phase 5 end-to-end demo
 
 ### 1. Start the certificate platform
@@ -114,9 +173,34 @@ HTTP API : http://127.0.0.1:8080
 DNS      : 127.0.0.1:1053/udp
 ```
 
-### 2. Generate client private key and CSR
+Keep this process running for the entire demo. Do not restart it between certificate issuance and Root CA download.
+
+### 2. Download the Root CA for this CA instance
 
 In another terminal:
+
+```bash
+mkdir -p ./client
+
+curl -s http://127.0.0.1:8080/ca/root \
+  -o ./client/root-ca.crt
+```
+
+You can inspect it with:
+
+```bash
+openssl x509 \
+  -in ./client/root-ca.crt \
+  -subject \
+  -issuer \
+  -fingerprint \
+  -sha256 \
+  -noout
+```
+
+Because the Root CA is currently generated in memory when `api-server` starts, this file must come from the same server instance that will issue your certificate.
+
+### 3. Generate client private key and CSR
 
 ```bash
 go run ./cmd/csr-client \
@@ -124,10 +208,11 @@ go run ./cmd/csr-client \
   -out ./client
 ```
 
-Generated files:
+Generated locally:
 
 ```text
 client/
+├── root-ca.crt
 ├── hello.test.key
 └── hello.test.csr
 ```
@@ -144,7 +229,7 @@ openssl req \
 
 You should see `DNS:hello.test` in Subject Alternative Name.
 
-### 3. Create an order with the CSR
+### 4. Create an order with the CSR
 
 Using `jq` to safely JSON-encode the PEM:
 
@@ -176,7 +261,7 @@ Example response:
 
 A CSR for another domain is rejected with HTTP `400`.
 
-### 4. Publish the DNS TXT challenge
+### 5. Publish the DNS TXT challenge
 
 ```bash
 curl -s -X POST http://127.0.0.1:8080/dns/txt \
@@ -193,7 +278,7 @@ Verify it through real DNS:
 dig @127.0.0.1 -p 1053 TXT _acme-challenge.hello.test
 ```
 
-### 5. Validate the order
+### 6. Validate the order
 
 ```bash
 curl -s -X POST \
@@ -206,7 +291,7 @@ Expected status:
 ready
 ```
 
-### 6. Issue the certificate
+### 7. Issue the certificate
 
 ```bash
 curl -s -X POST \
@@ -237,6 +322,7 @@ The client directory is now:
 
 ```text
 client/
+├── root-ca.crt          <- downloaded from the CA API
 ├── hello.test.key       <- generated locally, never sent to CA
 ├── hello.test.csr       <- sent to CA
 ├── hello.test.crt       <- returned by CA
@@ -244,7 +330,26 @@ client/
 └── issue-response.json
 ```
 
-### 7. Prove the issued certificate matches the client private key
+### 8. Verify the certificate chain
+
+Because `fullchain.pem` contains the leaf certificate followed by the Intermediate CA certificate, you can verify it with:
+
+```bash
+openssl verify \
+  -CAfile ./client/root-ca.crt \
+  -untrusted ./client/fullchain.pem \
+  ./client/hello.test.crt
+```
+
+Expected result:
+
+```text
+./client/hello.test.crt: OK
+```
+
+If this fails after restarting `api-server`, make sure the `root-ca.crt` and the leaf certificate were produced by the same CA server instance.
+
+### 9. Prove the issued certificate matches the client private key
 
 Compare the public keys:
 
@@ -264,7 +369,7 @@ diff /tmp/key.pub /tmp/cert.pub
 
 No output from `diff` means the certificate was issued for the public key in the client's private key.
 
-### 8. Run HTTPS with the client-owned private key
+### 10. Run HTTPS with the client-owned private key
 
 Add:
 
@@ -280,12 +385,6 @@ go run ./cmd/https-server \
   -addr 127.0.0.1:8443 \
   -cert ./client/fullchain.pem \
   -key ./client/hello.test.key
-```
-
-Download the lab Root CA:
-
-```bash
-curl -s http://127.0.0.1:8080/ca/root -o ./client/root-ca.crt
 ```
 
 Test without modifying the system trust store:
@@ -321,7 +420,9 @@ The original all-in-one lab command still exists:
 go run ./cmd/pki-server -domain hello.test -out ./out
 ```
 
-That command intentionally generates the leaf private key inside the process so the earliest PKI experiments remain easy to reproduce. The HTTP platform path now uses the safer CSR model.
+That command intentionally generates the Root CA, Intermediate CA and leaf private key inside one process so the earliest PKI experiments remain easy to reproduce.
+
+In that legacy path, `out/root-ca.crt` is generated directly by `cmd/pki-server`. This is different from the Phase 5 API path, where `root-ca.crt` should be downloaded from `GET /ca/root`.
 
 ## Security notes
 
@@ -334,6 +435,8 @@ Never commit:
 - runtime certificate material
 
 The HTTP API is still an educational local service. It has no authentication, persistent database, authorization policy, rate limiting, audit log, KMS/HSM integration, or production-grade CA key protection.
+
+Installing the lab Root CA into an operating-system trust store gives that CA broad trust on the local machine. Remove it after experiments if you no longer need it.
 
 ## Roadmap
 
