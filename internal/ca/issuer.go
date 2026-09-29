@@ -19,7 +19,8 @@ type IssuedCertificate struct {
 	FullChainPEM []byte
 }
 
-// IssueServerCertificate issues a TLS server certificate for domain.
+// IssueServerCertificate issues a TLS server certificate for domain and generates
+// the leaf private key inside the CA process. This is retained for the Phase 1/2 CLI demo.
 func IssueServerCertificate(intermediate *Authority, domain string, validity time.Duration) (*IssuedCertificate, error) {
 	if intermediate == nil || intermediate.Certificate == nil || intermediate.PrivateKey == nil {
 		return nil, fmt.Errorf("intermediate CA is incomplete")
@@ -39,25 +40,16 @@ func IssueServerCertificate(intermediate *Authority, domain string, validity tim
 	now := time.Now().UTC()
 	template := &x509.Certificate{
 		SerialNumber: serial,
-		Subject: pkix.Name{
-			CommonName: domain,
-		},
+		Subject: pkix.Name{CommonName: domain},
 		DNSNames:              []string{domain},
 		NotBefore:             now.Add(-5 * time.Minute),
 		NotAfter:              now.Add(validity),
 		BasicConstraintsValid: true,
-		KeyUsage: x509.KeyUsageDigitalSignature |
-			x509.KeyUsageKeyEncipherment,
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 
-	der, err := x509.CreateCertificate(
-		rand.Reader,
-		template,
-		intermediate.Certificate,
-		&key.PublicKey,
-		intermediate.PrivateKey,
-	)
+	der, err := x509.CreateCertificate(rand.Reader, template, intermediate.Certificate, &key.PublicKey, intermediate.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("issue server certificate: %w", err)
 	}
@@ -72,13 +64,54 @@ func IssueServerCertificate(intermediate *Authority, domain string, validity tim
 	certPEM := certificate.CertificatePEM(der)
 	fullChain := append(append([]byte{}, certPEM...), intermediate.CertPEM...)
 
-	return &IssuedCertificate{
-		Certificate:  cert,
-		PrivateKey:   key,
-		CertPEM:      certPEM,
-		KeyPEM:       keyPEM,
-		FullChainPEM: fullChain,
-	}, nil
+	return &IssuedCertificate{Certificate: cert, PrivateKey: key, CertPEM: certPEM, KeyPEM: keyPEM, FullChainPEM: fullChain}, nil
+}
+
+// IssueServerCertificateFromCSR signs a validated client CSR. The leaf private
+// key never enters the CA process.
+func IssueServerCertificateFromCSR(intermediate *Authority, req *x509.CertificateRequest, validity time.Duration) (*IssuedCertificate, error) {
+	if intermediate == nil || intermediate.Certificate == nil || intermediate.PrivateKey == nil {
+		return nil, fmt.Errorf("intermediate CA is incomplete")
+	}
+	if req == nil {
+		return nil, fmt.Errorf("CSR is required")
+	}
+	if err := req.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("verify CSR signature: %w", err)
+	}
+	if len(req.DNSNames) == 0 {
+		return nil, fmt.Errorf("CSR must contain at least one DNS SAN")
+	}
+
+	serial, err := randomSerialNumber()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      req.Subject,
+		DNSNames:     append([]string(nil), req.DNSNames...),
+		IPAddresses:  append([]byte(nil), nil...),
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.Add(validity),
+		BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, template, intermediate.Certificate, req.PublicKey, intermediate.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("issue server certificate from CSR: %w", err)
+	}
+	cert, err := certificate.ParseCertificate(der)
+	if err != nil {
+		return nil, err
+	}
+	certPEM := certificate.CertificatePEM(der)
+	fullChain := append(append([]byte{}, certPEM...), intermediate.CertPEM...)
+
+	return &IssuedCertificate{Certificate: cert, CertPEM: certPEM, FullChainPEM: fullChain}, nil
 }
 
 // VerifyServerCertificate verifies the leaf against the provided root and intermediate CAs.
