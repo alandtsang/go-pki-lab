@@ -13,7 +13,6 @@ import (
 	"github.com/alandtsang/go-pki-lab/internal/order"
 )
 
-// Entry is the platform representation of a certificate order.
 type Entry struct {
 	ID          string
 	Order       *order.Order
@@ -24,16 +23,21 @@ type Entry struct {
 	UpdatedAt   time.Time
 }
 
-// Service coordinates certificate orders, DNS-01 validation and issuance.
+type Repository interface {
+	LoadAll() ([]*Entry, error)
+	Save(*Entry) error
+}
+
 type Service struct {
 	mu           sync.RWMutex
 	orders       map[string]*Entry
 	root         *ca.Authority
 	intermediate *ca.Authority
 	dnsServer    string
+	repository   Repository
 }
 
-func NewService(root, intermediate *ca.Authority, dnsServer string) (*Service, error) {
+func NewService(root, intermediate *ca.Authority, dnsServer string, repositories ...Repository) (*Service, error) {
 	if root == nil || root.Certificate == nil {
 		return nil, fmt.Errorf("root CA is required")
 	}
@@ -43,7 +47,27 @@ func NewService(root, intermediate *ca.Authority, dnsServer string) (*Service, e
 	if dnsServer == "" {
 		return nil, fmt.Errorf("DNS server address is required")
 	}
-	return &Service{orders: make(map[string]*Entry), root: root, intermediate: intermediate, dnsServer: dnsServer}, nil
+	s := &Service{orders: make(map[string]*Entry), root: root, intermediate: intermediate, dnsServer: dnsServer}
+	if len(repositories) > 0 && repositories[0] != nil {
+		s.repository = repositories[0]
+		entries, err := s.repository.LoadAll()
+		if err != nil {
+			return nil, fmt.Errorf("load persisted orders: %w", err)
+		}
+		for _, entry := range entries {
+			if entry != nil {
+				s.orders[entry.ID] = entry
+			}
+		}
+	}
+	return s, nil
+}
+
+func (s *Service) persist(entry *Entry) error {
+	if s.repository == nil {
+		return nil
+	}
+	return s.repository.Save(entry)
 }
 
 func (s *Service) CreateOrder(domain string, csrPEM []byte) (*Entry, error) {
@@ -63,8 +87,11 @@ func (s *Service) CreateOrder(domain string, csrPEM []byte) (*Entry, error) {
 	entry := &Entry{ID: id, Order: o, CSR: req, CSRPEM: append([]byte(nil), csrPEM...), CreatedAt: now, UpdatedAt: now}
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.persist(entry); err != nil {
+		return nil, err
+	}
 	s.orders[id] = entry
-	s.mu.Unlock()
 	return cloneEntry(entry), nil
 }
 
@@ -91,9 +118,13 @@ func (s *Service) ValidateOrder(id string) (*Entry, error) {
 	}
 	if err := entry.Order.ValidateDNS01(s.dnsServer); err != nil {
 		entry.UpdatedAt = time.Now().UTC()
+		_ = s.persist(entry)
 		return cloneEntry(entry), err
 	}
 	entry.UpdatedAt = time.Now().UTC()
+	if err := s.persist(entry); err != nil {
+		return cloneEntry(entry), err
+	}
 	return cloneEntry(entry), nil
 }
 
@@ -127,6 +158,9 @@ func (s *Service) IssueOrder(id string, validity time.Duration) (*Entry, error) 
 	}
 	entry.Certificate = leaf
 	entry.UpdatedAt = time.Now().UTC()
+	if err := s.persist(entry); err != nil {
+		return cloneEntry(entry), err
+	}
 	return cloneEntry(entry), nil
 }
 
