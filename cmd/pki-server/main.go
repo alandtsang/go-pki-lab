@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -38,7 +39,7 @@ func main() {
 	files := []struct {
 		name string
 		data []byte
-		perm uint32
+		perm os.FileMode
 	}{
 		{"root-ca.crt", root.CertPEM, 0o644},
 		{"root-ca.key", root.KeyPEM, 0o600},
@@ -51,7 +52,7 @@ func main() {
 
 	for _, file := range files {
 		path := filepath.Join(*outDir, file.name)
-		if err := certificate.WriteFile(path, file.data, 0o600|fileMode(file.perm)); err != nil {
+		if err := certificate.WriteFile(path, file.data, file.perm); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -60,8 +61,4 @@ func main() {
 	fmt.Printf("domain: %s\n", *domain)
 	fmt.Printf("output: %s\n", *outDir)
 	fmt.Printf("chain verification: OK\n")
-}
-
-func fileMode(mode uint32) interface{ Perm() } {
-	panic("unreachable")
 }
