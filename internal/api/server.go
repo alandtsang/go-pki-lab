@@ -83,12 +83,13 @@ func (s *Server) handleGetTXT(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Domain string `json:"domain"`
+		CSRPEM string `json:"csr_pem"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	entry, err := s.service.CreateOrder(req.Domain)
+	entry, err := s.service.CreateOrder(req.Domain, []byte(req.CSRPEM))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -108,10 +109,7 @@ func (s *Server) handleGetOrder(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleValidateOrder(w http.ResponseWriter, r *http.Request) {
 	entry, err := s.service.ValidateOrder(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-			"error": err.Error(),
-			"order": orderResponse(entry, false),
-		})
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": err.Error(), "order": orderResponse(entry, false)})
 		return
 	}
 	writeJSON(w, http.StatusOK, orderResponse(entry, false))
@@ -120,10 +118,7 @@ func (s *Server) handleValidateOrder(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleIssueOrder(w http.ResponseWriter, r *http.Request) {
 	entry, err := s.service.IssueOrder(r.PathValue("id"), 90*24*time.Hour)
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": err.Error(),
-			"order": orderResponse(entry, false),
-		})
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "order": orderResponse(entry, false)})
 		return
 	}
 	writeJSON(w, http.StatusOK, orderResponse(entry, true))
@@ -134,24 +129,17 @@ func orderResponse(entry *platform.Entry, includeCertificate bool) map[string]an
 		return map[string]any{}
 	}
 	resp := map[string]any{
-		"id":         entry.ID,
-		"domain":     entry.Order.Domain,
-		"status":     entry.Order.Status,
-		"created_at": entry.CreatedAt,
-		"updated_at": entry.UpdatedAt,
+		"id": entry.ID, "domain": entry.Order.Domain, "status": entry.Order.Status,
+		"created_at": entry.CreatedAt, "updated_at": entry.UpdatedAt,
+		"csr_submitted": entry.CSR != nil,
 	}
 	if entry.Order.Challenge != nil {
-		resp["challenge"] = map[string]any{
-			"type":  "dns-01",
-			"name":  entry.Order.Challenge.Name,
-			"value": entry.Order.Challenge.Token,
-		}
+		resp["challenge"] = map[string]any{"type": "dns-01", "name": entry.Order.Challenge.Name, "value": entry.Order.Challenge.Token}
 	}
 	if includeCertificate && entry.Certificate != nil {
 		resp["certificate"] = map[string]any{
 			"certificate_pem": string(entry.Certificate.CertPEM),
-			"private_key_pem": string(entry.Certificate.KeyPEM),
-			"fullchain_pem":   string(entry.Certificate.FullChainPEM),
+			"fullchain_pem": string(entry.Certificate.FullChainPEM),
 		}
 	}
 	return resp
