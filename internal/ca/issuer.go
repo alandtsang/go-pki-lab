@@ -92,7 +92,6 @@ func IssueServerCertificateFromCSR(intermediate *Authority, req *x509.Certificat
 		SerialNumber: serial,
 		Subject:      req.Subject,
 		DNSNames:     append([]string(nil), req.DNSNames...),
-		IPAddresses:  append([]byte(nil), nil...),
 		NotBefore:             now.Add(-5 * time.Minute),
 		NotAfter:              now.Add(validity),
 		BasicConstraintsValid: true,
