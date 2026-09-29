@@ -2,12 +2,14 @@ package platform
 
 import (
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/alandtsang/go-pki-lab/internal/ca"
+	"github.com/alandtsang/go-pki-lab/internal/csr"
 	"github.com/alandtsang/go-pki-lab/internal/order"
 )
 
@@ -15,6 +17,8 @@ import (
 type Entry struct {
 	ID          string
 	Order       *order.Order
+	CSR         *x509.CertificateRequest
+	CSRPEM      []byte
 	Certificate *ca.IssuedCertificate
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -39,15 +43,14 @@ func NewService(root, intermediate *ca.Authority, dnsServer string) (*Service, e
 	if dnsServer == "" {
 		return nil, fmt.Errorf("DNS server address is required")
 	}
-	return &Service{
-		orders:       make(map[string]*Entry),
-		root:         root,
-		intermediate: intermediate,
-		dnsServer:    dnsServer,
-	}, nil
+	return &Service{orders: make(map[string]*Entry), root: root, intermediate: intermediate, dnsServer: dnsServer}, nil
 }
 
-func (s *Service) CreateOrder(domain string) (*Entry, error) {
+func (s *Service) CreateOrder(domain string, csrPEM []byte) (*Entry, error) {
+	req, err := csr.ParseAndValidate(csrPEM, domain)
+	if err != nil {
+		return nil, err
+	}
 	o, err := order.New(domain)
 	if err != nil {
 		return nil, err
@@ -57,7 +60,7 @@ func (s *Service) CreateOrder(domain string) (*Entry, error) {
 		return nil, err
 	}
 	now := time.Now().UTC()
-	entry := &Entry{ID: id, Order: o, CreatedAt: now, UpdatedAt: now}
+	entry := &Entry{ID: id, Order: o, CSR: req, CSRPEM: append([]byte(nil), csrPEM...), CreatedAt: now, UpdatedAt: now}
 
 	s.mu.Lock()
 	s.orders[id] = entry
@@ -108,8 +111,11 @@ func (s *Service) IssueOrder(id string, validity time.Duration) (*Entry, error) 
 	if entry.Order.Status != order.StatusReady {
 		return cloneEntry(entry), fmt.Errorf("order must be ready before issuance, current status: %s", entry.Order.Status)
 	}
+	if entry.CSR == nil {
+		return cloneEntry(entry), fmt.Errorf("order CSR is missing")
+	}
 
-	leaf, err := ca.IssueServerCertificate(s.intermediate, entry.Order.Domain, validity)
+	leaf, err := ca.IssueServerCertificateFromCSR(s.intermediate, entry.CSR, validity)
 	if err != nil {
 		return cloneEntry(entry), err
 	}
@@ -132,13 +138,12 @@ func randomID() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-// cloneEntry returns a shallow immutable snapshot suitable for API responses.
-// The certificate and challenge objects are treated as read-only after publication.
 func cloneEntry(entry *Entry) *Entry {
 	if entry == nil {
 		return nil
 	}
 	copyEntry := *entry
+	copyEntry.CSRPEM = append([]byte(nil), entry.CSRPEM...)
 	if entry.Order != nil {
 		copyOrder := *entry.Order
 		if entry.Order.Challenge != nil {
