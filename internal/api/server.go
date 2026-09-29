@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -158,7 +159,7 @@ func orderResponse(entry *platform.Entry, includeCertificate bool) map[string]an
 
 func decodeJSON(r *http.Request, dst any) error {
 	defer r.Body.Close()
-	decoder := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20))
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
 		return fmt.Errorf("invalid JSON body: %w", err)
