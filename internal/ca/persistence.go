@@ -56,7 +56,11 @@ func LoadAuthority(dir, name string) (*Authority, error) {
 	if !ok {
 		return nil, fmt.Errorf("private key for %s is not RSA", name)
 	}
-	if cert.PublicKey == nil || key.PublicKey.N.Cmp(cert.PublicKey.(*rsa.PublicKey).N) != 0 {
+	certKey, ok := cert.PublicKey.(*rsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("certificate public key for %s is not RSA", name)
+	}
+	if key.PublicKey.N.Cmp(certKey.N) != 0 || key.PublicKey.E != certKey.E {
 		return nil, fmt.Errorf("certificate and private key mismatch for %s", name)
 	}
 	return &Authority{Certificate: cert, PrivateKey: key, CertPEM: certPEM, KeyPEM: keyPEM}, nil
