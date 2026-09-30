@@ -50,8 +50,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	acmeServer := acme.NewServer()
-	acmeIssuance, err := acme.NewIssuance(acmeServer, root, intermediate, dnsServer.Addr())
+
+	acmeStateStore, err := acme.NewFileStateStore(filepath.Join(*dataDir, "acme", "state.json"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	acmeServer, err := acme.NewServerWithStore(acmeStateStore)
+	if err != nil {
+		log.Fatal(err)
+	}
+	acmeIssuance, err := acme.NewIssuanceWithStore(acmeServer, root, intermediate, dnsServer.Addr(), acmeStateStore)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -78,6 +86,7 @@ func main() {
 		fmt.Printf("Local DNS: %s\n", dnsServer.Addr())
 		fmt.Printf("Root CA: http://%s/ca/root\n", *httpAddr)
 		fmt.Printf("Persistent data: %s\n", *dataDir)
+		fmt.Printf("ACME state: %s\n", filepath.Join(*dataDir, "acme", "state.json"))
 		if created {
 			fmt.Printf("CA state: initialized new persistent CA\n")
 		} else {
