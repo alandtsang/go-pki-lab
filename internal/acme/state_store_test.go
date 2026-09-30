@@ -20,7 +20,7 @@ func TestFileStateStoreRoundTrip(t *testing.T) {
 		state.Accounts["acct-1"] = AccountRecord{
 			ID:         "acct-1",
 			Status:     "valid",
-			JWK:        json.RawMessage(`{"kty":"EC","crv":"P-256","x":"AQ","y":"Ag"}`),
+			JWK:        json.RawMessage("{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"AQ\",\"y\":\"Ag\"}"),
 			Thumbprint: "thumb",
 		}
 		state.Orders["order-1"] = Order{ID: "order-1", AccountID: "acct-1", Status: "valid", Domain: "hello.test"}
