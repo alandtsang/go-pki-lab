@@ -51,8 +51,17 @@ func main() {
 		log.Fatal(err)
 	}
 	acmeServer := acme.NewServer()
+	acmeIssuance, err := acme.NewIssuance(acmeServer, root, intermediate, dnsServer.Addr())
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /acme/challenge/{id}", acmeIssuance.HandleChallenge)
+	mux.HandleFunc("POST /acme/authz/{id}", acmeIssuance.HandleAuthorization)
+	mux.HandleFunc("POST /acme/order/{id}", acmeIssuance.HandleOrder)
+	mux.HandleFunc("POST /acme/finalize/{id}", acmeIssuance.HandleFinalize)
+	mux.HandleFunc("POST /acme/cert/{id}", acmeIssuance.HandleCertificate)
 	mux.Handle("/acme/", acmeServer.Handler())
 	mux.Handle("/", apiServer.Handler())
 
