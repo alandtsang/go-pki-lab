@@ -3,7 +3,6 @@ package acme
 import (
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -246,13 +245,13 @@ func (s *Server) handleNewOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOrder(w http.ResponseWriter, r *http.Request) {
-	_, _, err := s.verifyAccountRequest(r)
+	account, _, err := s.verifyAccountRequest(r)
 	if err != nil {
 		s.writeACMEError(w, err)
 		return
 	}
 	order := s.getOrder(r.PathValue("id"))
-	if order == nil {
+	if order == nil || order.AccountID != account.ID {
 		s.respondProblem(w, http.StatusNotFound, "malformed", "order not found")
 		return
 	}
@@ -261,13 +260,13 @@ func (s *Server) handleOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuthorization(w http.ResponseWriter, r *http.Request) {
-	_, _, err := s.verifyAccountRequest(r)
+	account, _, err := s.verifyAccountRequest(r)
 	if err != nil {
 		s.writeACMEError(w, err)
 		return
 	}
 	order := s.getOrder(r.PathValue("id"))
-	if order == nil {
+	if order == nil || order.AccountID != account.ID {
 		s.respondProblem(w, http.StatusNotFound, "malformed", "authorization not found")
 		return
 	}
@@ -289,9 +288,6 @@ func (s *Server) verifyAccountRequest(r *http.Request) (*Account, verifiedJWS, e
 	if err != nil {
 		return nil, verifiedJWS{}, err
 	}
-	if verified.Header.KID == "" {
-		return nil, verifiedJWS{}, &acmeError{Status: http.StatusBadRequest, Type: "malformed", Detail: "kid is required"}
-	}
 	id := strings.TrimPrefix(verified.Header.KID, absolutePathURL(r, "/acme/acct/"))
 	if id == verified.Header.KID || id == "" {
 		return nil, verifiedJWS{}, &acmeError{Status: http.StatusUnauthorized, Type: "accountDoesNotExist", Detail: "unknown account URL"}
@@ -302,12 +298,6 @@ func (s *Server) verifyAccountRequest(r *http.Request) (*Account, verifiedJWS, e
 	if account == nil {
 		return nil, verifiedJWS{}, &acmeError{Status: http.StatusUnauthorized, Type: "accountDoesNotExist", Detail: "account does not exist"}
 	}
-
-	body, err := readRequestBody(r)
-	if err != nil {
-		return nil, verifiedJWS{}, err
-	}
-	_ = body
 	return account, verified, nil
 }
 
@@ -484,12 +474,3 @@ func absolutePathURL(r *http.Request, path string) string {
 func absoluteRequestURL(r *http.Request) string {
 	return requestBaseURL(r) + r.URL.RequestURI()
 }
-
-func readRequestBody(r *http.Request) ([]byte, error) {
-	if r.Body == nil {
-		return nil, nil
-	}
-	return io.ReadAll(io.LimitReader(r.Body, 1<<20))
-}
-
-var _ = x509.CertificateRequest{}
