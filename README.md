@@ -1,6 +1,6 @@
 # go-pki-lab
 
-A Go-based local PKI and certificate authority lab for learning certificate chains, DNS-01 validation, CSR signing, TLS, persistence, and certificate-platform workflows.
+A Go-based local PKI and certificate authority lab for learning certificate chains, DNS-01 validation, CSR signing, TLS, persistence, renewal, revocation, and certificate lifecycle workflows.
 
 > Local research only. Do not use generated CA keys in production.
 
@@ -56,6 +56,14 @@ A Go-based local PKI and certificate authority lab for learning certificate chai
 - Persisted orders are restored when the API server restarts
 - Previously issued certificates remain verifiable after server restart
 
+### Phase 7: certificate lifecycle
+- `POST /orders/{id}/renew` creates a new renewal order
+- `POST /orders/{id}/revoke` revokes an issued certificate
+- Revocation time and reason are persisted
+- `GET /certificates/{serial}/status` returns `good`, `revoked`, or `expired`
+- `GET /ca/crl` returns a real X.509 CRL signed by the Intermediate CA
+- Renewed certificates use a new order and new DNS-01 challenge
+
 ## Architecture
 
 ```text
@@ -75,6 +83,10 @@ Certificate Platform API
   +---- DNS-01 -> Local DNS :1053               |
   |                                             |
   +---- Intermediate CA signs CSR public key    |
+  |                                             |
+  +---- revoke -> persistent status -> CRL      |
+  |                                             |
+  +---- renew -> new order -> DNS-01 -> issue   |
   v
 certificate + fullchain
 ```
@@ -88,7 +100,7 @@ go mod tidy
 go test ./...
 ```
 
-## Start the persistent certificate platform
+## Start the certificate platform
 
 ```bash
 go run ./cmd/api-server
@@ -97,24 +109,24 @@ go run ./cmd/api-server
 Defaults:
 
 ```text
-HTTP API       : http://127.0.0.1:8080
-DNS            : 127.0.0.1:1053/udp
-Persistent data: ./data
+HTTP API        : http://127.0.0.1:8080
+DNS             : 127.0.0.1:1053/udp
+Persistent data : ./data
 ```
 
-On the first startup you should see:
+On first startup:
 
 ```text
 CA state: initialized new persistent CA
 ```
 
-On later startups using the same `data` directory:
+On later startups using the same data directory:
 
 ```text
 CA state: loaded existing persistent CA
 ```
 
-You can choose another storage directory:
+Use another storage directory if needed:
 
 ```bash
 go run ./cmd/api-server -data-dir ./lab-data
@@ -122,7 +134,7 @@ go run ./cmd/api-server -data-dir ./lab-data
 
 ## Persistent data layout
 
-After the first startup:
+The persistent CA lives under `data/ca`, not under `client/`:
 
 ```text
 data/
@@ -137,33 +149,50 @@ data/
 
 `data/` is ignored by Git.
 
-The CA private key files are sensitive even though this project is only a lab. Do not commit or distribute them.
-
-## Where `root-ca.crt` comes from
-
-The API exposes the persistent Root CA certificate at:
+The CA private keys are sensitive. Never commit or distribute:
 
 ```text
-GET /ca/root
+data/ca/root-ca.key
+data/ca/intermediate-ca.key
 ```
 
-Download it with:
+## Client working directory
 
-```bash
-mkdir -p ./client
-curl -s http://127.0.0.1:8080/ca/root \
-  -o ./client/root-ca.crt
+The `client/` directory is only for client-owned or client-downloaded artifacts:
+
+```text
+client/
+├── hello.test.key          <- generated locally by csr-client
+├── hello.test.csr          <- generated locally by csr-client
+├── hello.test.crt          <- extracted from issuance response
+├── fullchain.pem           <- extracted from issuance response
+└── issue-response.json     <- optional saved API response
 ```
 
-You may also inspect the persisted copy directly at:
+`root-ca.crt` is **not generated into `client/` automatically**.
+
+The authoritative persisted Root CA is:
 
 ```text
 data/ca/root-ca.crt
 ```
 
-The API route is preferred because clients should not need direct access to CA storage.
+Clients should normally obtain a copy through the API:
 
-## Phase 5/6 end-to-end demo
+```text
+GET /ca/root
+```
+
+If you want a client-side copy for `curl`, OpenSSL, or trust-store installation, download it explicitly:
+
+```bash
+curl -s http://127.0.0.1:8080/ca/root \
+  -o ./client/root-ca.crt
+```
+
+After that explicit download, `client/root-ca.crt` is just a copy of the persistent CA certificate; the canonical persisted file remains `data/ca/root-ca.crt`.
+
+## End-to-end certificate issuance
 
 ### 1. Start the API server
 
@@ -171,42 +200,35 @@ The API route is preferred because clients should not need direct access to CA s
 go run ./cmd/api-server
 ```
 
-### 2. Download the Root CA
+### 2. Generate client private key and CSR
 
 ```bash
 mkdir -p ./client
-curl -s http://127.0.0.1:8080/ca/root \
-  -o ./client/root-ca.crt
-```
 
-Record its fingerprint:
-
-```bash
-openssl x509 \
-  -in ./client/root-ca.crt \
-  -fingerprint \
-  -sha256 \
-  -noout
-```
-
-### 3. Generate client private key and CSR
-
-```bash
 go run ./cmd/csr-client \
   -domain hello.test \
   -out ./client
 ```
 
-Generated locally:
+At this point:
 
 ```text
 client/
-├── root-ca.crt
 ├── hello.test.key
 └── hello.test.csr
 ```
 
-### 4. Create an order
+Inspect the CSR:
+
+```bash
+openssl req \
+  -in ./client/hello.test.csr \
+  -text \
+  -noout \
+  -verify
+```
+
+### 3. Create an order
 
 ```bash
 jq -n \
@@ -218,9 +240,15 @@ jq -n \
     -d @-
 ```
 
-Save the returned `id`, challenge `name`, and challenge `value`.
+Save the returned:
 
-### 5. Publish DNS TXT
+```text
+id
+challenge.name
+challenge.value
+```
+
+### 4. Publish DNS TXT
 
 ```bash
 curl -s -X POST http://127.0.0.1:8080/dns/txt \
@@ -237,7 +265,7 @@ Verify:
 dig @127.0.0.1 -p 1053 TXT _acme-challenge.hello.test
 ```
 
-### 6. Validate the order
+### 5. Validate the order
 
 ```bash
 curl -s -X POST \
@@ -250,7 +278,7 @@ Expected status:
 ready
 ```
 
-### 7. Issue the certificate
+### 6. Issue the certificate
 
 ```bash
 curl -s -X POST \
@@ -258,7 +286,7 @@ curl -s -X POST \
   -o ./client/issue-response.json
 ```
 
-Extract:
+Extract the leaf certificate and chain:
 
 ```bash
 jq -r '.certificate.certificate_pem' \
@@ -268,7 +296,42 @@ jq -r '.certificate.fullchain_pem' \
   ./client/issue-response.json > ./client/fullchain.pem
 ```
 
-### 8. Verify the chain
+Now:
+
+```text
+client/
+├── hello.test.key
+├── hello.test.csr
+├── hello.test.crt
+├── fullchain.pem
+└── issue-response.json
+```
+
+### 7. Verify the certificate chain
+
+You can verify directly against the persistent Root CA:
+
+```bash
+openssl verify \
+  -CAfile ./data/ca/root-ca.crt \
+  -untrusted ./client/fullchain.pem \
+  ./client/hello.test.crt
+```
+
+Expected:
+
+```text
+./client/hello.test.crt: OK
+```
+
+Or, if you specifically want to behave like an external client, first download the Root CA:
+
+```bash
+curl -s http://127.0.0.1:8080/ca/root \
+  -o ./client/root-ca.crt
+```
+
+Then verify with:
 
 ```bash
 openssl verify \
@@ -277,106 +340,44 @@ openssl verify \
   ./client/hello.test.crt
 ```
 
-Expected:
+## Verify CA persistence across restart
 
-```text
-./client/hello.test.crt: OK
-```
-
-## Phase 6 restart persistence test
-
-This verifies that the Root CA and issued order survive a process restart.
-
-### 1. Record the current Root CA fingerprint
+Record the persisted Root CA fingerprint:
 
 ```bash
-curl -s http://127.0.0.1:8080/ca/root \
-  -o /tmp/root-before.crt
-
 openssl x509 \
-  -in /tmp/root-before.crt \
-  -fingerprint -sha256 -noout
+  -in ./data/ca/root-ca.crt \
+  -fingerprint \
+  -sha256 \
+  -noout
 ```
 
-Also confirm an existing issued order can be read:
-
-```bash
-curl -s http://127.0.0.1:8080/orders/<order-id>
-```
-
-### 2. Stop and restart the API server
-
-Stop it with `Ctrl+C`, then run again:
+Stop and restart:
 
 ```bash
 go run ./cmd/api-server
 ```
 
-The startup log should say:
+Run the same command again. The fingerprint must be identical.
 
-```text
-CA state: loaded existing persistent CA
-```
-
-### 3. Compare the Root CA after restart
+You can also verify that an old issued certificate still chains to the same Root CA:
 
 ```bash
-curl -s http://127.0.0.1:8080/ca/root \
-  -o /tmp/root-after.crt
-
-openssl x509 \
-  -in /tmp/root-after.crt \
-  -fingerprint -sha256 -noout
-
-cmp /tmp/root-before.crt /tmp/root-after.crt
-```
-
-`cmp` should produce no output. The SHA-256 fingerprints should also be identical.
-
-### 4. Confirm the order still exists
-
-```bash
-curl -s http://127.0.0.1:8080/orders/<order-id>
-```
-
-The same order ID and status should be returned.
-
-For a previously issued order, calling issue again should return its persisted certificate rather than generating a new certificate:
-
-```bash
-curl -s -X POST \
-  http://127.0.0.1:8080/orders/<order-id>/issue
-```
-
-### 5. Verify the old certificate against the Root CA after restart
-
-```bash
-curl -s http://127.0.0.1:8080/ca/root \
-  -o ./client/root-ca-after-restart.crt
-
 openssl verify \
-  -CAfile ./client/root-ca-after-restart.crt \
+  -CAfile ./data/ca/root-ca.crt \
   -untrusted ./client/fullchain.pem \
   ./client/hello.test.crt
 ```
 
-Expected:
-
-```text
-./client/hello.test.crt: OK
-```
-
-This is the key Phase 6 result: restarting the certificate platform no longer changes its trust anchor.
-
 ## Run local HTTPS
 
-Add this to your hosts file:
+Map the test domain:
 
 ```text
 127.0.0.1 hello.test
 ```
 
-Then:
+Start HTTPS:
 
 ```bash
 go run ./cmd/https-server \
@@ -386,16 +387,138 @@ go run ./cmd/https-server \
   -key ./client/hello.test.key
 ```
 
-Test:
+Test directly with the persisted Root CA:
 
 ```bash
+curl --cacert ./data/ca/root-ca.crt \
+  https://hello.test:8443/
+```
+
+Or download a client copy first:
+
+```bash
+curl -s http://127.0.0.1:8080/ca/root \
+  -o ./client/root-ca.crt
+
 curl --cacert ./client/root-ca.crt \
   https://hello.test:8443/
 ```
 
+## Phase 7 lifecycle demo
+
+### Query certificate status
+
+Get the serial number from the order response or certificate:
+
+```bash
+openssl x509 \
+  -in ./client/hello.test.crt \
+  -serial \
+  -noout
+```
+
+Then:
+
+```bash
+curl -s \
+  http://127.0.0.1:8080/certificates/<serial>/status \
+  | jq
+```
+
+Typical status before revocation:
+
+```json
+{
+  "status": "good"
+}
+```
+
+### Revoke the certificate
+
+Example using reason code `1` (`keyCompromise`):
+
+```bash
+curl -s -X POST \
+  http://127.0.0.1:8080/orders/<order-id>/revoke \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":1}' \
+  | jq
+```
+
+Query status again:
+
+```bash
+curl -s \
+  http://127.0.0.1:8080/certificates/<serial>/status \
+  | jq
+```
+
+Expected:
+
+```json
+{
+  "status": "revoked"
+}
+```
+
+### Download and inspect the CRL
+
+```bash
+curl -s http://127.0.0.1:8080/ca/crl \
+  -o ./client/intermediate.crl.pem
+```
+
+Inspect:
+
+```bash
+openssl crl \
+  -in ./client/intermediate.crl.pem \
+  -text \
+  -noout
+```
+
+The revoked certificate serial number should appear in the CRL.
+
+### Renew a certificate
+
+```bash
+curl -s -X POST \
+  http://127.0.0.1:8080/orders/<order-id>/renew \
+  | jq
+```
+
+Renewal creates a new order:
+
+```text
+old certificate/order
+        |
+        v
+POST /renew
+        |
+        v
+new pending order
+        |
+        v
+new DNS-01 challenge
+        |
+        v
+validate
+        |
+        v
+issue new certificate
+```
+
+The old certificate is not overwritten.
+
+For the complete lifecycle walkthrough, see:
+
+```text
+docs/phase7-lifecycle.md
+```
+
 ## Persistence behavior and current limitations
 
-The following state is persistent:
+Persistent state:
 
 ```text
 Root CA
@@ -407,11 +530,21 @@ DNS challenge data
 Order status
 Issued leaf certificate
 Full certificate chain
+Revocation state
+Revocation reason
+Revocation time
+Renewal relationship
 ```
 
-The local DNS TXT store is still in memory. After restarting the API server, TXT records must be published again if a `pending` or failed order still needs DNS validation.
+Still in memory:
 
-This stage uses a file-backed repository intentionally so the persistence model stays easy to inspect. A future version can replace it with SQLite/PostgreSQL without changing the core certificate workflow.
+```text
+Local DNS TXT records
+```
+
+After restarting the API server, a pending order that still needs DNS validation may require its TXT record to be published again.
+
+The current certificate status endpoint is an application-level JSON status API. It is useful for lifecycle experiments but is not yet a complete RFC 6960 binary OCSP responder.
 
 The API is still an educational local service. It does not yet include authentication, authorization, rate limiting, audit logging, KMS/HSM integration, or production-grade CA key protection.
 
@@ -421,7 +554,7 @@ The API is still an educational local service. It does not yet include authentic
 go run ./cmd/pki-server -domain hello.test -out ./out
 ```
 
-This legacy command still generates an isolated CA and certificate chain inside one process. It does not use the persistent API-server CA state.
+This legacy command creates an isolated CA and certificate chain under `out/`. It does not use the persistent CA under `data/ca/`.
 
 ## Roadmap
 
@@ -432,6 +565,6 @@ Phase 3  [done] Certificate Order HTTP API
 Phase 4  [done] Trusted local HTTPS
 Phase 5  [done] Client private key + CSR signing workflow
 Phase 6  [done] Persistent CA/order/certificate storage
-Phase 7  Renewal, revocation, CRL and OCSP experiments
-Phase 8  ACME-compatible workflow experiments
+Phase 7  [done] Renewal + revocation + CRL + certificate status API
+Phase 8  RFC 6960 OCSP responder + ACME-compatible workflow experiments
 ```
