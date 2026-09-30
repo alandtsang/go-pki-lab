@@ -1,0 +1,288 @@
+package acme
+
+import (
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/alandtsang/go-pki-lab/internal/ca"
+	mdns "github.com/miekg/dns"
+)
+
+// Issuance connects the ACME protocol layer to the persistent lab CA and
+// local authoritative DNS server.
+type Issuance struct {
+	server       *Server
+	root         *ca.Authority
+	intermediate *ca.Authority
+	dnsServer    string
+
+	mu                  sync.RWMutex
+	challengeStatus     map[string]string
+	authorizationStatus map[string]string
+	validatedAt         map[string]time.Time
+	certificates        map[string][]byte
+}
+
+func NewIssuance(server *Server, root, intermediate *ca.Authority, dnsServer string) (*Issuance, error) {
+	if server == nil {
+		return nil, fmt.Errorf("ACME server is required")
+	}
+	if root == nil || root.Certificate == nil {
+		return nil, fmt.Errorf("root CA is required")
+	}
+	if intermediate == nil || intermediate.Certificate == nil || intermediate.PrivateKey == nil {
+		return nil, fmt.Errorf("intermediate CA is required")
+	}
+	if strings.TrimSpace(dnsServer) == "" {
+		return nil, fmt.Errorf("DNS server address is required")
+	}
+	return &Issuance{
+		server:              server,
+		root:                root,
+		intermediate:        intermediate,
+		dnsServer:           dnsServer,
+		challengeStatus:     make(map[string]string),
+		authorizationStatus: make(map[string]string),
+		validatedAt:         make(map[string]time.Time),
+		certificates:        make(map[string][]byte),
+	}, nil
+}
+
+func (i *Issuance) HandleChallenge(w http.ResponseWriter, r *http.Request) {
+	account, _, err := i.server.verifyAccountRequest(r)
+	if err != nil {
+		i.server.writeACMEError(w, err)
+		return
+	}
+	id := r.PathValue("id")
+	order := i.server.getOrder(id)
+	if order == nil || order.AccountID != account.ID {
+		i.server.respondProblem(w, http.StatusNotFound, "malformed", "challenge not found")
+		return
+	}
+
+	if err := i.verifyDNS01(order); err != nil {
+		i.mu.Lock()
+		i.challengeStatus[id] = "invalid"
+		i.authorizationStatus[id] = "invalid"
+		i.mu.Unlock()
+		i.setOrderStatus(id, "invalid")
+		i.server.respondProblem(w, http.StatusUnauthorized, "unauthorized", err.Error())
+		return
+	}
+
+	now := time.Now().UTC()
+	i.mu.Lock()
+	i.challengeStatus[id] = "valid"
+	i.authorizationStatus[id] = "valid"
+	i.validatedAt[id] = now
+	i.mu.Unlock()
+	i.setOrderStatus(id, "ready")
+
+	i.server.addReplayNonce(w)
+	writeJSON(w, http.StatusOK, i.challengeResponse(order, "valid", &now))
+}
+
+func (i *Issuance) HandleAuthorization(w http.ResponseWriter, r *http.Request) {
+	account, _, err := i.server.verifyAccountRequest(r)
+	if err != nil {
+		i.server.writeACMEError(w, err)
+		return
+	}
+	id := r.PathValue("id")
+	order := i.server.getOrder(id)
+	if order == nil || order.AccountID != account.ID {
+		i.server.respondProblem(w, http.StatusNotFound, "malformed", "authorization not found")
+		return
+	}
+
+	challengeStatus, authorizationStatus, validatedAt := i.statuses(id)
+	i.server.addReplayNonce(w)
+	response := map[string]any{
+		"identifier": map[string]string{"type": "dns", "value": order.Domain},
+		"status":     authorizationStatus,
+		"challenges": []map[string]any{i.challengeResponse(order, challengeStatus, validatedAt)},
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (i *Issuance) HandleOrder(w http.ResponseWriter, r *http.Request) {
+	account, _, err := i.server.verifyAccountRequest(r)
+	if err != nil {
+		i.server.writeACMEError(w, err)
+		return
+	}
+	order := i.server.getOrder(r.PathValue("id"))
+	if order == nil || order.AccountID != account.ID {
+		i.server.respondProblem(w, http.StatusNotFound, "malformed", "order not found")
+		return
+	}
+	i.server.addReplayNonce(w)
+	writeJSON(w, http.StatusOK, i.orderResponse(order, r))
+}
+
+func (i *Issuance) HandleFinalize(w http.ResponseWriter, r *http.Request) {
+	account, verified, err := i.server.verifyAccountRequest(r)
+	if err != nil {
+		i.server.writeACMEError(w, err)
+		return
+	}
+	id := r.PathValue("id")
+	order := i.server.getOrder(id)
+	if order == nil || order.AccountID != account.ID {
+		i.server.respondProblem(w, http.StatusNotFound, "malformed", "order not found")
+		return
+	}
+	if order.Status != "ready" {
+		i.server.respondProblem(w, http.StatusForbidden, "orderNotReady", "order must be ready before finalize")
+		return
+	}
+
+	var payload struct {
+		CSR string `json:"csr"`
+	}
+	if err := json.Unmarshal(verified.Payload, &payload); err != nil || payload.CSR == "" {
+		i.server.respondProblem(w, http.StatusBadRequest, "malformed", "finalize payload must contain csr")
+		return
+	}
+	csrDER, err := base64.RawURLEncoding.DecodeString(payload.CSR)
+	if err != nil {
+		i.server.respondProblem(w, http.StatusBadRequest, "badCSR", "csr must be base64url-encoded DER")
+		return
+	}
+	req, err := x509.ParseCertificateRequest(csrDER)
+	if err != nil {
+		i.server.respondProblem(w, http.StatusBadRequest, "badCSR", "cannot parse CSR")
+		return
+	}
+	if err := req.CheckSignature(); err != nil {
+		i.server.respondProblem(w, http.StatusBadRequest, "badCSR", "CSR signature is invalid")
+		return
+	}
+	if len(req.DNSNames) != 1 || !strings.EqualFold(strings.TrimSuffix(req.DNSNames[0], "."), order.Domain) {
+		i.server.respondProblem(w, http.StatusBadRequest, "badCSR", "CSR SAN must exactly match the order identifier")
+		return
+	}
+
+	issued, err := ca.IssueServerCertificateFromCSR(i.intermediate, req, 90*24*time.Hour)
+	if err != nil {
+		i.server.respondProblem(w, http.StatusInternalServerError, "serverInternal", err.Error())
+		return
+	}
+	if err := ca.VerifyServerCertificate(issued.Certificate, i.root, i.intermediate, order.Domain); err != nil {
+		i.server.respondProblem(w, http.StatusInternalServerError, "serverInternal", err.Error())
+		return
+	}
+
+	i.mu.Lock()
+	i.certificates[id] = append([]byte(nil), issued.FullChainPEM...)
+	i.mu.Unlock()
+	i.setOrderStatus(id, "valid")
+	order = i.server.getOrder(id)
+
+	i.server.addReplayNonce(w)
+	writeJSON(w, http.StatusOK, i.orderResponse(order, r))
+}
+
+func (i *Issuance) HandleCertificate(w http.ResponseWriter, r *http.Request) {
+	account, _, err := i.server.verifyAccountRequest(r)
+	if err != nil {
+		i.server.writeACMEError(w, err)
+		return
+	}
+	id := r.PathValue("id")
+	order := i.server.getOrder(id)
+	if order == nil || order.AccountID != account.ID {
+		i.server.respondProblem(w, http.StatusNotFound, "malformed", "certificate not found")
+		return
+	}
+	i.mu.RLock()
+	chain := append([]byte(nil), i.certificates[id]...)
+	i.mu.RUnlock()
+	if order.Status != "valid" || len(chain) == 0 {
+		i.server.respondProblem(w, http.StatusNotFound, "malformed", "certificate is not available")
+		return
+	}
+	i.server.addReplayNonce(w)
+	w.Header().Set("Content-Type", "application/pem-certificate-chain")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(chain)
+}
+
+func (i *Issuance) verifyDNS01(order *Order) error {
+	msg := new(mdns.Msg)
+	msg.SetQuestion(mdns.Fqdn("_acme-challenge."+order.Domain), mdns.TypeTXT)
+	client := &mdns.Client{Timeout: 2 * time.Second}
+	resp, _, err := client.Exchange(msg, i.dnsServer)
+	if err != nil {
+		return fmt.Errorf("query DNS-01 TXT: %w", err)
+	}
+	if resp == nil {
+		return fmt.Errorf("empty DNS response")
+	}
+	for _, answer := range resp.Answer {
+		txt, ok := answer.(*mdns.TXT)
+		if !ok {
+			continue
+		}
+		for _, value := range txt.Txt {
+			if value == order.DNSValue {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("DNS-01 TXT validation failed for _acme-challenge.%s", order.Domain)
+}
+
+func (i *Issuance) setOrderStatus(id, status string) {
+	i.server.mu.Lock()
+	defer i.server.mu.Unlock()
+	if order := i.server.orders[id]; order != nil {
+		order.Status = status
+	}
+}
+
+func (i *Issuance) statuses(id string) (challenge, authorization string, validatedAt *time.Time) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	challenge = i.challengeStatus[id]
+	if challenge == "" {
+		challenge = "pending"
+	}
+	authorization = i.authorizationStatus[id]
+	if authorization == "" {
+		authorization = "pending"
+	}
+	if value, ok := i.validatedAt[id]; ok {
+		copyValue := value
+		validatedAt = &copyValue
+	}
+	return
+}
+
+func (i *Issuance) challengeResponse(order *Order, status string, validatedAt *time.Time) map[string]any {
+	response := map[string]any{
+		"type":   "dns-01",
+		"url":    order.ChallengeURL,
+		"status": status,
+		"token":  order.Token,
+	}
+	if validatedAt != nil {
+		response["validated"] = validatedAt
+	}
+	return response
+}
+
+func (i *Issuance) orderResponse(order *Order, r *http.Request) map[string]any {
+	response := i.server.orderResponse(order)
+	if order.Status == "valid" {
+		response["certificate"] = absolutePathURL(r, "/acme/cert/"+order.ID)
+	}
+	return response
+}
