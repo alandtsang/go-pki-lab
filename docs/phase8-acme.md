@@ -1,8 +1,10 @@
-# Phase 8.1 — ACME protocol foundation
+# Phase 8 — ACME protocol and certificate issuance
 
-This phase introduces the RFC 8555 protocol surface without replacing the existing certificate-platform API.
+This phase adds an RFC 8555-style ACME surface on top of the existing persistent lab CA.
 
-Implemented:
+## Implemented
+
+### Phase 8.1 protocol foundation
 
 - ACME Directory
 - fresh one-time Replay-Nonce values
@@ -15,8 +17,29 @@ Implemented:
 - account creation and lookup
 - account `kid` authentication
 - new Order creation for one DNS identifier
-- Authorization resource with a DNS-01 challenge token
+- Authorization resource with DNS-01 challenge token
 - replayed nonce rejection
+
+### Phase 8.2 issuance flow
+
+- `POST /acme/challenge/{id}` performs a real TXT lookup through the local DNS server
+- DNS-01 uses the standard value:
+
+```text
+keyAuthorization = token + "." + accountJWKThumbprint
+TXT value        = base64url(SHA256(keyAuthorization))
+```
+
+- successful DNS-01 changes Authorization to `valid` and Order to `ready`
+- `POST /acme/finalize/{id}` accepts a base64url DER CSR
+- CSR signature and DNS SAN are validated
+- CSR SAN must exactly match the ACME Order identifier
+- the persistent Intermediate CA signs the CSR public key
+- successful finalize changes the Order to `valid`
+- the final Order response includes a certificate URL
+- `POST /acme/cert/{id}` implements POST-as-GET certificate download
+- certificate download returns `application/pem-certificate-chain` containing leaf + intermediate
+- the leaf private key remains entirely client-owned
 
 ## Endpoints
 
@@ -29,6 +52,9 @@ POST /acme/acct/{id}
 POST /acme/new-order
 POST /acme/order/{id}
 POST /acme/authz/{id}
+POST /acme/challenge/{id}
+POST /acme/finalize/{id}
+POST /acme/cert/{id}
 ```
 
 The API server prints the directory URL at startup:
@@ -80,22 +106,11 @@ ACME POST bodies use flattened JSON JWS:
 }
 ```
 
-For `newAccount`, the protected header contains `jwk`:
+For `newAccount`, the protected header contains `jwk`. After account creation, the server returns the account URL in `Location`; later requests use that URL as `kid`.
 
-```json
-{
-  "alg": "ES256",
-  "jwk": { "kty": "EC", "crv": "P-256", "x": "...", "y": "..." },
-  "nonce": "...",
-  "url": "http://127.0.0.1:8080/acme/new-account"
-}
-```
+## New Order and DNS-01
 
-After account creation, the server returns the account URL in `Location`. Later requests use that URL as `kid` instead of embedding `jwk`.
-
-## New Order
-
-The current lab supports exactly one DNS identifier per Order:
+The lab currently supports exactly one DNS identifier per Order:
 
 ```json
 {
@@ -105,81 +120,129 @@ The current lab supports exactly one DNS identifier per Order:
 }
 ```
 
-The response contains an Authorization URL and Finalize URL:
+The Order starts as `pending` and exposes Authorization and Finalize URLs.
 
-```json
-{
-  "status": "pending",
-  "identifiers": [
-    { "type": "dns", "value": "hello.test" }
-  ],
-  "authorizations": [
-    "http://127.0.0.1:8080/acme/authz/<id>"
-  ],
-  "finalize": "http://127.0.0.1:8080/acme/finalize/<id>"
-}
-```
-
-The Authorization resource exposes a DNS-01 token. Internally, the server also computes the standard DNS-01 TXT value:
+The Authorization resource exposes a DNS-01 token. A standard ACME client computes:
 
 ```text
 keyAuthorization = token + "." + accountJWKThumbprint
 TXT value        = base64url(SHA256(keyAuthorization))
 ```
 
-## Automated tests
+Publish that value at:
+
+```text
+_acme-challenge.hello.test
+```
+
+For this lab, the TXT record can be written to the local authoritative DNS store through the existing helper API:
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/dns/txt \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name":"_acme-challenge.hello.test",
+    "values":["<computed-acme-dns-value>"]
+  }'
+```
+
+When the client POSTs to the challenge URL, the ACME server queries the local DNS server at `127.0.0.1:1053` (or the configured DNS address). If the value matches, the challenge and Authorization become `valid`, and the Order becomes `ready`.
+
+## Finalize and certificate download
+
+The Finalize request carries a DER CSR encoded with base64url without padding:
+
+```json
+{
+  "csr": "<base64url DER CSR>"
+}
+```
+
+The server checks:
+
+```text
+CSR parses successfully
+        +
+CSR signature is valid
+        +
+CSR has exactly one DNS SAN
+        +
+DNS SAN == ACME Order domain
+```
+
+The persistent Intermediate CA then signs the CSR public key. The Order becomes `valid` and contains:
+
+```json
+{
+  "status": "valid",
+  "certificate": "http://127.0.0.1:8080/acme/cert/<id>"
+}
+```
+
+A POST-as-GET to that URL returns:
+
+```text
+-----BEGIN CERTIFICATE-----
+<leaf>
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+<intermediate>
+-----END CERTIFICATE-----
+```
+
+The Root CA is not included in the served chain; it remains the trust anchor under:
+
+```text
+data/ca/root-ca.crt
+```
+
+## Automated protocol test
+
+Run:
 
 ```bash
 go test ./internal/acme -v
 ```
 
-The tests use a real P-256 account key and ES256 JWS signatures to cover:
+`TestACMEEndToEndIssuance` uses real cryptographic material and exercises:
 
 ```text
-Directory
-   -> Nonce
-   -> newAccount
-   -> account Location/kid
+P-256 account key
+   -> Replay-Nonce
+   -> ES256 newAccount JWS
    -> newOrder
    -> Authorization
+   -> publish DNS TXT
+   -> challenge validation through UDP DNS
+   -> Order ready
+   -> client-generated CSR
+   -> finalize
+   -> persistent CA signing
+   -> certificate POST-as-GET
+   -> x509 chain verification
 ```
 
-A separate test proves that replaying an already-consumed nonce is rejected.
+The separate nonce test proves that replaying an already-consumed nonce is rejected.
 
-## Current boundary
+## Current state and limitations
 
-Phase 8.1 intentionally stops before certificate issuance through ACME.
+The ACME issuance path is now end-to-end functional inside the lab, but several production-grade features remain intentionally out of scope:
 
-Not wired yet:
+- ACME accounts and ACME protocol Orders are currently in memory and disappear on API-server restart
+- only one DNS identifier per Order is supported
+- wildcard identifiers are not yet handled specially
+- only DNS-01 is implemented
+- challenge validation is synchronous rather than queued/background processing
+- no account key rollover endpoint
+- no ACME certificate revocation endpoint yet
+- no External Account Binding
+- no persistent nonce/account/order ACME repository
+- no rate limits or authorization policy
+
+The next practical compatibility test is to point a standard ACME client such as `acme.sh` at:
 
 ```text
-POST /acme/challenge/{id}
-POST /acme/finalize/{id}
-POST /acme/cert/{id}
+http://127.0.0.1:8080/acme/directory
 ```
 
-The next step is to connect those resources to the existing platform:
-
-```text
-ACME DNS-01 challenge
-        |
-        v
-local DNS :1053 validation
-        |
-        v
-ACME Order ready
-        |
-        v
-Finalize CSR
-        |
-        v
-platform.Service
-        |
-        v
-persistent Intermediate CA
-        |
-        v
-certificate chain
-```
-
-Until that wiring is complete, standard ACME clients can discover the server and exercise account/order protocol behavior, but they cannot yet complete issuance.
+and observe which RFC 8555 compatibility gaps remain in a real client flow.
