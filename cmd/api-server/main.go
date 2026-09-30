@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alandtsang/go-pki-lab/internal/acme"
 	"github.com/alandtsang/go-pki-lab/internal/api"
 	"github.com/alandtsang/go-pki-lab/internal/ca"
 	localdns "github.com/alandtsang/go-pki-lab/internal/dns"
@@ -49,16 +50,22 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	acmeServer := acme.NewServer()
+
+	mux := http.NewServeMux()
+	mux.Handle("/acme/", acmeServer.Handler())
+	mux.Handle("/", apiServer.Handler())
 
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
-		Handler:           apiServer.Handler(),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	go func() {
 		fmt.Printf("go-pki-lab API server started\n")
 		fmt.Printf("HTTP API: http://%s\n", *httpAddr)
+		fmt.Printf("ACME directory: http://%s/acme/directory\n", *httpAddr)
 		fmt.Printf("Local DNS: %s\n", dnsServer.Addr())
 		fmt.Printf("Root CA: http://%s/ca/root\n", *httpAddr)
 		fmt.Printf("Persistent data: %s\n", *dataDir)
