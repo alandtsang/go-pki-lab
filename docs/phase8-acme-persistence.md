@@ -48,7 +48,33 @@ The ACME server stores only the account **public JWK**. The ACME account private
 
 Accounts created before Phase 8.4 were never persisted by the server, so they cannot be restored retroactively.
 
-After upgrading to this phase, the first ACME run may need to register the account once again. After that, the account is persisted and survives server restarts.
+If acme.sh still has an old `kid` from a pre-8.4 run, the first request after upgrading may fail with:
+
+```text
+urn:ietf:params:acme:error:accountDoesNotExist
+```
+
+Do not delete the CA or previously issued certificates. Re-register the existing acme.sh account key against the same local ACME directory:
+
+```bash
+~/.acme.sh/acme.sh --register-account \
+  --server http://127.0.0.1:8080/acme/directory \
+  --accountkeylength ec-256 \
+  --debug 2
+```
+
+This sends `newAccount` using the existing account public JWK. The server creates/persists a new Account and acme.sh replaces its cached account URL (`kid`) with the newly returned `Location` value.
+
+Verify the persisted account exists:
+
+```bash
+jq '{
+  accounts: (.accounts | length),
+  account_ids: (.accounts | keys)
+}' ./data/acme/state.json
+```
+
+After this one-time migration, normal `--issue` calls should reuse the persisted account across server restarts.
 
 ## Automated tests
 
@@ -76,7 +102,7 @@ Start from a running server:
 go run ./cmd/api-server
 ```
 
-Issue a certificate through the existing local DNS hook:
+For a fresh Phase 8.4 installation, or after performing the migration step above, issue a certificate through the existing local DNS hook:
 
 ```bash
 export GO_PKI_LAB_API=http://127.0.0.1:8080
