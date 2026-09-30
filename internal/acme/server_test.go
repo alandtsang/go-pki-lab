@@ -36,7 +36,7 @@ func TestACMEAccountAndOrderFlow(t *testing.T) {
 
 	nonce := fetchNonce(t, server.URL)
 	accountURL := server.URL + "/acme/new-account"
-	accountBody := signES256JWS(t, key, accountURL, nonce, "", jwkValue, []byte(`{"termsOfServiceAgreed":true}`))
+	accountBody := signES256JWS(t, key, accountURL, nonce, "", jwkValue, []byte("{\"termsOfServiceAgreed\":true}"))
 	accountResp := doPOST(t, accountURL, accountBody)
 	if accountResp.StatusCode != http.StatusCreated {
 		t.Fatalf("newAccount status = %d, body = %s", accountResp.StatusCode, accountResp.Body)
@@ -51,7 +51,7 @@ func TestACMEAccountAndOrderFlow(t *testing.T) {
 	}
 
 	orderURL := server.URL + "/acme/new-order"
-	orderPayload := []byte(`{"identifiers":[{"type":"dns","value":"hello.test"}]}`)
+	orderPayload := []byte("{\"identifiers\":[{\"type\":\"dns\",\"value\":\"hello.test\"}]}")
 	orderBody := signES256JWS(t, key, orderURL, nonce, kid, nil, orderPayload)
 	orderResp := doPOST(t, orderURL, orderBody)
 	if orderResp.StatusCode != http.StatusCreated {
@@ -78,7 +78,7 @@ func TestACMEAccountAndOrderFlow(t *testing.T) {
 	if authzResp.StatusCode != http.StatusOK {
 		t.Fatalf("authorization status = %d, body = %s", authzResp.StatusCode, authzResp.Body)
 	}
-	if !bytes.Contains(authzResp.Body, []byte(`"type":"dns-01"`)) || !bytes.Contains(authzResp.Body, []byte(`"token":`)) {
+	if !bytes.Contains(authzResp.Body, []byte("\"type\":\"dns-01\"")) || !bytes.Contains(authzResp.Body, []byte("\"token\":")) {
 		t.Fatalf("unexpected authorization response: %s", authzResp.Body)
 	}
 }
@@ -94,7 +94,7 @@ func TestACMENonceCannotBeReused(t *testing.T) {
 	jwkValue := ecJWK(key)
 	nonce := fetchNonce(t, server.URL)
 	url := server.URL + "/acme/new-account"
-	body := signES256JWS(t, key, url, nonce, "", jwkValue, []byte(`{}`))
+	body := signES256JWS(t, key, url, nonce, "", jwkValue, []byte("{}"))
 
 	first := doPOST(t, url, body)
 	if first.StatusCode != http.StatusCreated {
