@@ -4,7 +4,7 @@ A Go-based local PKI and certificate authority lab for learning certificate chai
 
 > Local research only. Do not use generated CA keys in production.
 
-## Implemented
+## Progress
 
 ```text
 Phase 1  [done] Root CA -> Intermediate CA -> Leaf -> x509.Verify
@@ -15,51 +15,45 @@ Phase 5  [done] Client-owned private key + CSR signing
 Phase 6  [done] Persistent CA/order/certificate storage
 Phase 7  [done] Renewal + revocation + CRL + RFC 6960 OCSP
 Phase 8  [in progress] ACME protocol
-         8.1 Directory + Nonce + JWS + Account + Order
+         8.1 [done] Directory + Nonce + JWS + Account + Order
+         8.2 [done] DNS-01 + Finalize CSR + Certificate download
+         8.3 [next] Standard-client compatibility and ACME persistence
 ```
 
-## Current architecture
+## Architecture
 
 ```text
-Client
-  |
-  | generate private key + CSR
-  v
-Certificate Platform API :8080
-  |
-  +---- persistent CA
-  |       data/ca/root-ca.crt
-  |       data/ca/root-ca.key
-  |       data/ca/intermediate-ca.crt
-  |       data/ca/intermediate-ca.key
-  |
-  +---- persistent orders
-  |       data/orders/<order-id>.json
-  |
-  +---- DNS-01 validator -> local DNS :1053/udp
-  |
-  +---- Intermediate CA signs CSR public key
-  |
-  +---- lifecycle
-  |       |-- renewal
-  |       |-- revocation
-  |       |-- CRL
-  |       `-- OCSP
-  |
-  `---- ACME protocol
-          |-- directory / nonce
-          |-- JWS authentication
-          |-- account
-          `-- order / authorization
+                         go-pki-lab :8080
+                               |
+        +----------------------+----------------------+
+        |                                             |
+        v                                             v
+ Certificate Platform API                       ACME RFC 8555 API
+        |                                             |
+        +----------------------+----------------------+
+                               |
+                        Persistent CA
+                  data/ca/root-ca.{crt,key}
+            data/ca/intermediate-ca.{crt,key}
+                               |
+                               v
+                     Local DNS :1053/udp
+                               |
+                               v
+                           DNS-01
+                               |
+                               v
+                     Intermediate CA signs CSR
+                               |
+                               v
+                    Leaf + Intermediate chain
 ```
 
-The leaf private key never enters the CA platform.
+The leaf private key stays on the client side.
 
 ## Requirements
 
 - Go 1.24+
-
-After pulling a version that adds or changes dependencies, run:
 
 ```bash
 go mod tidy
@@ -81,17 +75,38 @@ DNS             : 127.0.0.1:1053/udp
 Persistent data : ./data
 ```
 
-First startup creates the Root and Intermediate CA. Later startups load the same persistent CA.
+The first startup creates the Root and Intermediate CA. Later startups load the same CA from disk.
 
-Use another data directory if needed:
+## Persistent server data
 
-```bash
-go run ./cmd/api-server -data-dir ./lab-data
+```text
+data/
+├── ca/
+│   ├── root-ca.crt
+│   ├── root-ca.key
+│   ├── intermediate-ca.crt
+│   └── intermediate-ca.key
+└── orders/
+    └── <platform-order-id>.json
 ```
 
-## Phase 8.1 ACME protocol foundation
+`data/` is ignored by Git. Never commit or distribute CA private keys.
 
-The current ACME endpoints are:
+The canonical trust anchor is:
+
+```text
+data/ca/root-ca.crt
+```
+
+Clients can obtain a copy through:
+
+```bash
+curl -s http://127.0.0.1:8080/ca/root -o ./client/root-ca.crt
+```
+
+`root-ca.crt` is not generated automatically into `client/`.
+
+## ACME endpoints
 
 ```text
 GET  /acme/directory
@@ -102,6 +117,9 @@ POST /acme/acct/{id}
 POST /acme/new-order
 POST /acme/order/{id}
 POST /acme/authz/{id}
+POST /acme/challenge/{id}
+POST /acme/finalize/{id}
+POST /acme/cert/{id}
 ```
 
 Discover the server:
@@ -110,64 +128,148 @@ Discover the server:
 curl -s http://127.0.0.1:8080/acme/directory | jq
 ```
 
-Get a fresh nonce:
+Get a nonce:
 
 ```bash
 curl -i -X HEAD http://127.0.0.1:8080/acme/new-nonce
 ```
 
-The ACME implementation validates flattened JSON JWS requests, one-time replay nonces, `url`, `jwk`/`kid`, and ES256 signatures. RSA/RS256 account keys are also supported for lab compatibility.
+The implementation validates flattened JSON JWS, `Replay-Nonce`, `url`, `jwk`/`kid`, ES256 signatures, and RS256 signatures for lab compatibility.
 
-Run the protocol tests:
+## ACME end-to-end flow
+
+```text
+Directory
+   |
+   v
+Nonce
+   |
+   v
+newAccount
+   |
+   v
+newOrder(hello.test)
+   |
+   v
+Authorization + dns-01 token
+   |
+   v
+_acme-challenge.hello.test TXT
+   |
+   v
+POST challenge
+   |
+   v
+DNS lookup through local DNS :1053
+   |
+   v
+Authorization = valid
+Order = ready
+   |
+   v
+POST finalize { csr }
+   |
+   v
+CSR signature + SAN validation
+   |
+   v
+Persistent Intermediate CA signs CSR
+   |
+   v
+Order = valid
+   |
+   v
+POST-as-GET certificate URL
+   |
+   v
+Leaf + Intermediate PEM chain
+```
+
+ACME DNS-01 uses the standard value:
+
+```text
+keyAuthorization = token + "." + accountJWKThumbprint
+TXT value        = base64url(SHA256(keyAuthorization))
+```
+
+For local experiments, TXT records can be written to the lab DNS server with:
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/dns/txt \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name":"_acme-challenge.hello.test",
+    "values":["<computed-acme-dns-value>"]
+  }'
+```
+
+The Finalize payload contains a base64url-encoded DER CSR. The server requires exactly one DNS SAN matching the ACME Order identifier.
+
+Certificate download returns:
+
+```text
+Content-Type: application/pem-certificate-chain
+
+-----BEGIN CERTIFICATE-----
+<leaf>
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+<intermediate>
+-----END CERTIFICATE-----
+```
+
+The Root CA is intentionally not included in the served chain.
+
+## ACME tests
+
+Run:
 
 ```bash
 go test ./internal/acme -v
 ```
 
-Phase 8.1 does **not** yet complete certificate issuance through ACME. The next wiring step is:
+The end-to-end test covers real cryptographic operations:
 
 ```text
-POST /acme/challenge/{id}
-        |
-        v
-DNS-01 validation through local DNS :1053
-        |
-        v
-POST /acme/finalize/{id} with CSR
-        |
-        v
-existing platform.Service + persistent Intermediate CA
-        |
-        v
-POST-as-GET /acme/cert/{id}
+P-256 account key
+-> ES256 JWS
+-> Account
+-> Order
+-> Authorization
+-> DNS TXT publication
+-> UDP DNS-01 validation
+-> client-generated CSR
+-> CA signing
+-> certificate download
+-> X.509 chain verification
 ```
 
-See:
+Run all tests:
+
+```bash
+go test ./...
+```
+
+See the detailed ACME notes in:
 
 ```text
 docs/phase8-acme.md
 ```
 
-## Persistent server data
+## Non-ACME certificate API
 
-The canonical CA files live under `data/ca/`:
+The original platform flow remains available for learning and comparison:
 
 ```text
-data/
-├── ca/
-│   ├── root-ca.crt
-│   ├── root-ca.key
-│   ├── intermediate-ca.crt
-│   └── intermediate-ca.key
-└── orders/
-    └── <order-id>.json
+POST /orders
+GET  /orders/{id}
+POST /orders/{id}/validate
+POST /orders/{id}/issue
+POST /dns/txt
+GET  /dns/txt
 ```
 
-`data/` is ignored by Git. Never commit or distribute the CA private keys.
-
-## Client working directory
-
-The client directory contains client-owned or downloaded artifacts:
+Client-side artifacts typically look like:
 
 ```text
 client/
@@ -178,90 +280,13 @@ client/
 └── issue-response.json
 ```
 
-`root-ca.crt` is **not automatically generated into `client/`**.
-
-The authoritative persisted Root CA is:
-
-```text
-data/ca/root-ca.crt
-```
-
-An external-style client can explicitly download a copy:
-
-```bash
-curl -s http://127.0.0.1:8080/ca/root \
-  -o ./client/root-ca.crt
-```
-
-## Certificate issuance flow
-
-Generate the client key and CSR:
-
-```bash
-mkdir -p ./client
-
-go run ./cmd/csr-client \
-  -domain hello.test \
-  -out ./client
-```
-
-Create an Order:
-
-```bash
-jq -n \
-  --arg domain "hello.test" \
-  --rawfile csr ./client/hello.test.csr \
-  '{domain:$domain, csr_pem:$csr}' \
-| curl -s -X POST http://127.0.0.1:8080/orders \
-    -H 'Content-Type: application/json' \
-    -d @-
-```
-
-Publish the returned DNS-01 challenge:
-
-```bash
-curl -s -X POST http://127.0.0.1:8080/dns/txt \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "name":"_acme-challenge.hello.test",
-    "values":["<challenge-value>"]
-  }'
-```
-
-Validate and issue:
-
-```bash
-curl -s -X POST \
-  http://127.0.0.1:8080/orders/<order-id>/validate
-
-curl -s -X POST \
-  http://127.0.0.1:8080/orders/<order-id>/issue \
-  -o ./client/issue-response.json
-```
-
-Extract the certificate files:
-
-```bash
-jq -r '.certificate.certificate_pem' \
-  ./client/issue-response.json > ./client/hello.test.crt
-
-jq -r '.certificate.fullchain_pem' \
-  ./client/issue-response.json > ./client/fullchain.pem
-```
-
-Verify the chain directly against the persistent CA:
+Verify a certificate against the persistent Root CA:
 
 ```bash
 openssl verify \
   -CAfile ./data/ca/root-ca.crt \
   -untrusted ./client/fullchain.pem \
   ./client/hello.test.crt
-```
-
-Expected:
-
-```text
-./client/hello.test.crt: OK
 ```
 
 ## Local HTTPS
@@ -285,8 +310,7 @@ go run ./cmd/https-server \
 Test:
 
 ```bash
-curl --cacert ./data/ca/root-ca.crt \
-  https://hello.test:8443/
+curl --cacert ./data/ca/root-ca.crt https://hello.test:8443/
 ```
 
 ## Certificate lifecycle APIs
@@ -299,57 +323,13 @@ GET  /ca/crl
 POST /ocsp
 ```
 
-### Human-readable status API
-
-```bash
-curl -s \
-  http://127.0.0.1:8080/certificates/<serial>/status \
-  | jq
-```
-
-Statuses include:
+Detailed lifecycle walkthrough:
 
 ```text
-good
-revoked
-expired
-```
-
-### Revoke
-
-Reason `1` is `keyCompromise`:
-
-```bash
-curl -s -X POST \
-  http://127.0.0.1:8080/orders/<order-id>/revoke \
-  -H 'Content-Type: application/json' \
-  -d '{"reason":1}' \
-  | jq
-```
-
-### CRL
-
-```bash
-curl -s http://127.0.0.1:8080/ca/crl \
-  -o ./client/intermediate.crl.pem
-
-openssl crl \
-  -in ./client/intermediate.crl.pem \
-  -text \
-  -noout
+docs/phase7-lifecycle.md
 ```
 
 ### RFC 6960 OCSP
-
-The binary OCSP endpoint is:
-
-```text
-POST /ocsp
-Content-Type: application/ocsp-request
-Response: application/ocsp-response
-```
-
-Query an issued certificate with OpenSSL:
 
 ```bash
 openssl ocsp \
@@ -361,41 +341,19 @@ openssl ocsp \
   -resp_text
 ```
 
-Before revocation, the certificate status should be `good`. After calling the revoke API, repeat the same command and the status should be `revoked`.
-
-The OCSP response is signed by the persistent Intermediate CA. For this lab stage, the Intermediate CA itself is the responder; a production design often uses a delegated OCSP signing certificate.
-
-### Renewal
-
-```bash
-curl -s -X POST \
-  http://127.0.0.1:8080/orders/<old-order-id>/renew \
-  | jq
-```
-
-Renewal creates a new pending Order with a new DNS-01 challenge. The old certificate is not overwritten.
-
-For the complete lifecycle walkthrough, see:
-
-```text
-docs/phase7-lifecycle.md
-```
+Before revocation the status should be `good`; after revocation it should be `revoked`.
 
 ## Persistence behavior
 
-Persistent:
+Persistent today:
 
 ```text
 Root CA
 Intermediate CA
-Order ID
-Domain
-CSR
-DNS challenge metadata
-Order status
-Issued certificate and full chain
-Revocation time/reason
-Renewal relationship
+non-ACME platform Orders
+issued platform certificates
+revocation state
+renewal relationships
 ```
 
 Still in memory:
@@ -405,22 +363,27 @@ Local DNS TXT records
 ACME nonces
 ACME accounts
 ACME protocol Orders
+ACME-issued certificate response state
 ```
 
-The ACME protocol storage is intentionally in-memory during Phase 8.1; it will be connected to persistent platform Orders as challenge/finalize issuance is implemented.
+Therefore restarting `api-server` preserves the CA trust anchor, but currently discards active ACME protocol sessions and ACME account/order state.
 
 ## Current limitations
 
-- ACME challenge/finalize/certificate resources are not wired yet
-- ACME account and protocol Order state are currently in memory
-- renewal currently reuses the original CSR/public key
-- CRL number is generated dynamically instead of using a persisted monotonic counter
+- one DNS identifier per ACME Order
+- DNS-01 only
+- no wildcard-specific ACME behavior yet
+- ACME account/order state is not persistent yet
+- challenge validation is synchronous
+- no account key rollover
+- no ACME revocation endpoint yet
+- no External Account Binding
+- renewal in the non-ACME API currently reuses the original CSR/public key
+- CRL number is not yet a persisted monotonic counter
 - no delta CRL
-- leaf certificates do not yet contain CRL Distribution Point URLs
-- leaf certificates do not yet contain an OCSP Authority Information Access URL
-- OCSP nonce handling is not implemented; the OpenSSL demo uses `-no_nonce`
+- leaf certificates do not yet contain CRL Distribution Point or OCSP AIA URLs
+- OCSP nonce handling is not implemented
 - OCSP responses are signed directly by the Intermediate CA rather than a delegated responder certificate
-- no authentication/authorization around the non-ACME certificate issuance or revocation APIs
 - no KMS/HSM integration or production-grade CA key protection
 
 ## Legacy all-in-one CLI
@@ -429,4 +392,4 @@ The ACME protocol storage is intentionally in-memory during Phase 8.1; it will b
 go run ./cmd/pki-server -domain hello.test -out ./out
 ```
 
-This command creates an isolated CA and certificate chain under `out/`. It does not use the persistent CA under `data/ca/`.
+This creates an isolated CA and certificate chain under `out/`; it does not use the persistent CA under `data/ca/`.
