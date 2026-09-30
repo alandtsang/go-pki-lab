@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/alandtsang/go-pki-lab/internal/ca"
 )
 
 func TestFileStateStoreRoundTrip(t *testing.T) {
@@ -111,5 +113,45 @@ func TestServerRestoresAccountAndOrder(t *testing.T) {
 	}
 	if len(second.nonces) != 0 {
 		t.Fatalf("nonces must not be persisted")
+	}
+}
+
+func TestIssuanceRestoresLifecycleAndCertificate(t *testing.T) {
+	store, err := NewFileStateStore(filepath.Join(t.TempDir(), "acme", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := ca.NewRoot("Persistence Test Root", 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intermediate, err := ca.NewIntermediate(root, "Persistence Test Intermediate", 12*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := store.Update(func(state *PersistentState) error {
+		state.Issuance["order-1"] = IssuanceRecord{
+			ChallengeStatus:     "valid",
+			AuthorizationStatus: "valid",
+			ValidatedAt:         &now,
+			CertificatePEM:      []byte("persisted-chain"),
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := NewServer()
+	issuance, err := NewIssuanceWithStore(server, root, intermediate, "127.0.0.1:1053", store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge, authorization, validatedAt := issuance.statuses("order-1")
+	if challenge != "valid" || authorization != "valid" || validatedAt == nil || !validatedAt.Equal(now) {
+		t.Fatalf("issuance status was not restored: challenge=%s authorization=%s validatedAt=%v", challenge, authorization, validatedAt)
+	}
+	if string(issuance.certificates["order-1"]) != "persisted-chain" {
+		t.Fatalf("certificate chain was not restored")
 	}
 }
