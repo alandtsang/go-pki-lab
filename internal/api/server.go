@@ -39,6 +39,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /ca/crl", s.handleCRL)
 	s.mux.HandleFunc("POST /ocsp", s.handleOCSP)
 	s.mux.HandleFunc("POST /dns/txt", s.handleSetTXT)
+	s.mux.HandleFunc("DELETE /dns/txt", s.handleDeleteTXT)
 	s.mux.HandleFunc("GET /dns/txt", s.handleGetTXT)
 	s.mux.HandleFunc("POST /orders", s.handleCreateOrder)
 	s.mux.HandleFunc("GET /orders/{id}", s.handleGetOrder)
@@ -107,6 +108,22 @@ func (s *Server) handleSetTXT(w http.ResponseWriter, r *http.Request) {
 	}
 	s.dnsStore.SetTXT(req.Name, req.Values...)
 	writeJSON(w, http.StatusOK, map[string]any{"name": req.Name, "values": s.dnsStore.TXT(req.Name)})
+}
+
+func (s *Server) handleDeleteTXT(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("name is required"))
+		return
+	}
+	s.dnsStore.DeleteTXT(req.Name)
+	writeJSON(w, http.StatusOK, map[string]any{"name": req.Name, "values": []string{}})
 }
 
 func (s *Server) handleGetTXT(w http.ResponseWriter, r *http.Request) {
