@@ -2,7 +2,10 @@ module github.com/alandtsang/go-pki-lab
 
 go 1.24.0
 
-require github.com/miekg/dns v1.1.72
+require (
+	github.com/miekg/dns v1.1.72
+	golang.org/x/crypto v0.57.0
+)
 
 require (
 	golang.org/x/mod v0.31.0 // indirect
