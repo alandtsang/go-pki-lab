@@ -96,6 +96,37 @@ func TestOrderAPIFlow(t *testing.T) {
 	}
 }
 
+func TestDNSDeleteTXT(t *testing.T) {
+	root, _ := ca.NewRoot("Test Root CA", 24*time.Hour)
+	intermediate, _ := ca.NewIntermediate(root, "Test Intermediate CA", 12*time.Hour)
+	store := localdns.NewStore()
+	dnsServer, err := localdns.StartLocalServer("127.0.0.1:0", store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dnsServer.Shutdown()
+	service, _ := platform.NewService(root, intermediate, dnsServer.Addr())
+	apiServer, _ := NewServer(service, store, root.CertPEM)
+	httpServer := httptest.NewServer(apiServer.Handler())
+	defer httpServer.Close()
+
+	name := "_acme-challenge.hello.test"
+	set := doJSON(t, http.MethodPost, httpServer.URL+"/dns/txt", map[string]any{
+		"name": name, "values": []string{"value"},
+	})
+	if set.StatusCode != http.StatusOK || len(store.TXT(name)) != 1 {
+		t.Fatalf("set TXT failed: status=%d body=%s", set.StatusCode, set.Body)
+	}
+
+	deleted := doJSON(t, http.MethodDelete, httpServer.URL+"/dns/txt", map[string]any{"name": name})
+	if deleted.StatusCode != http.StatusOK {
+		t.Fatalf("delete TXT status = %d, body = %s", deleted.StatusCode, deleted.Body)
+	}
+	if values := store.TXT(name); len(values) != 0 {
+		t.Fatalf("TXT values after delete = %v", values)
+	}
+}
+
 func TestCreateOrderRejectsCSRDomainMismatch(t *testing.T) {
 	root, _ := ca.NewRoot("Test Root CA", 24*time.Hour)
 	intermediate, _ := ca.NewIntermediate(root, "Test Intermediate CA", 12*time.Hour)
