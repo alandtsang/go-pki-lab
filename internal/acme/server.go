@@ -72,9 +72,6 @@ func (s *Server) handleDirectory(w http.ResponseWriter, r *http.Request) {
 		"newNonce":   base + "/acme/new-nonce",
 		"newAccount": base + "/acme/new-account",
 		"newOrder":   base + "/acme/new-order",
-		"meta": map[string]any{
-			"termsOfService": base + "/acme/terms",
-		},
 	})
 }
 
