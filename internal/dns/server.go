@@ -30,6 +30,12 @@ func (s *Store) SetTXT(name string, values ...string) {
 	s.txt[normalizeName(name)] = copyValues
 }
 
+func (s *Store) DeleteTXT(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.txt, normalizeName(name))
+}
+
 func (s *Store) TXT(name string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
