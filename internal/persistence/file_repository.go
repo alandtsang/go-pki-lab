@@ -95,9 +95,9 @@ func (r *FileRepository) LoadAll() ([]*platform.Entry, error) {
 			return nil, fmt.Errorf("restore order %s CSR: %w", rec.ID, err)
 		}
 		entry := &platform.Entry{
-			ID: rec.ID,
+			ID:    rec.ID,
 			Order: &order.Order{Domain: rec.Domain, Status: rec.Status, Challenge: &challenge.DNS01{Domain: rec.Domain, Name: rec.ChallengeName, Token: rec.ChallengeToken}},
-			CSR: req, CSRPEM: []byte(rec.CSRPEM), CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt,
+			CSR:   req, CSRPEM: []byte(rec.CSRPEM), CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt,
 			RevokedAt: rec.RevokedAt, RevocationReason: rec.RevocationReason, RenewedFrom: rec.RenewedFrom,
 		}
 		if rec.CertificatePEM != "" {

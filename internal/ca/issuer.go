@@ -39,14 +39,14 @@ func IssueServerCertificate(intermediate *Authority, domain string, validity tim
 	}
 	now := time.Now().UTC()
 	template := &x509.Certificate{
-		SerialNumber: serial,
-		Subject: pkix.Name{CommonName: domain},
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: domain},
 		DNSNames:              []string{domain},
 		NotBefore:             now.Add(-5 * time.Minute),
 		NotAfter:              now.Add(validity),
 		BasicConstraintsValid: true,
-		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 
 	der, err := x509.CreateCertificate(rand.Reader, template, intermediate.Certificate, &key.PublicKey, intermediate.PrivateKey)
@@ -89,14 +89,14 @@ func IssueServerCertificateFromCSR(intermediate *Authority, req *x509.Certificat
 	}
 	now := time.Now().UTC()
 	template := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      req.Subject,
-		DNSNames:     append([]string(nil), req.DNSNames...),
+		SerialNumber:          serial,
+		Subject:               req.Subject,
+		DNSNames:              append([]string(nil), req.DNSNames...),
 		NotBefore:             now.Add(-5 * time.Minute),
 		NotAfter:              now.Add(validity),
 		BasicConstraintsValid: true,
-		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 
 	der, err := x509.CreateCertificate(rand.Reader, template, intermediate.Certificate, req.PublicKey, intermediate.PrivateKey)

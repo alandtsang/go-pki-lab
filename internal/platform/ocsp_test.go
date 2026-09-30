@@ -33,13 +33,13 @@ func TestOCSPResponseGoodAndRevoked(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.orders["issued"] = &Entry{
-		ID: "issued",
-		Order: &order.Order{Domain: "hello.test", Status: order.StatusValid},
-		CSR: request.CSR,
-		CSRPEM: request.CSRPEM,
+		ID:          "issued",
+		Order:       &order.Order{Domain: "hello.test", Status: order.StatusValid},
+		CSR:         request.CSR,
+		CSRPEM:      request.CSRPEM,
 		Certificate: leaf,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
 	}
 
 	requestDER, err := ocsp.CreateRequest(leaf.Certificate, intermediate.Certificate, nil)

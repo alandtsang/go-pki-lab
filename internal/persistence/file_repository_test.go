@@ -19,8 +19,8 @@ func TestFileRepositoryRoundTrip(t *testing.T) {
 	entry := &platform.Entry{
 		ID: "order-1",
 		Order: &order.Order{
-			Domain: "hello.test",
-			Status: order.StatusPending,
+			Domain:    "hello.test",
+			Status:    order.StatusPending,
 			Challenge: &challenge.DNS01{Domain: "hello.test", Name: "_acme-challenge.hello.test", Token: "token"},
 		},
 		CSR: req.CSR, CSRPEM: req.CSRPEM, CreatedAt: now, UpdatedAt: now,

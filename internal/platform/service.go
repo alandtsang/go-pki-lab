@@ -233,13 +233,13 @@ func (s *Service) CertificateStatus(serial string) (map[string]any, error) {
 			status = "expired"
 		}
 		return map[string]any{
-			"serial_number": cert.SerialNumber.Text(16),
-			"order_id": entry.ID,
-			"domain": entry.Order.Domain,
-			"status": status,
-			"not_before": cert.NotBefore,
-			"not_after": cert.NotAfter,
-			"revoked_at": entry.RevokedAt,
+			"serial_number":     cert.SerialNumber.Text(16),
+			"order_id":          entry.ID,
+			"domain":            entry.Order.Domain,
+			"status":            status,
+			"not_before":        cert.NotBefore,
+			"not_after":         cert.NotAfter,
+			"revoked_at":        entry.RevokedAt,
 			"revocation_reason": entry.RevocationReason,
 		}, nil
 	}
@@ -255,9 +255,9 @@ func (s *Service) CRLPEM() ([]byte, error) {
 			continue
 		}
 		entries = append(entries, x509.RevocationListEntry{
-			SerialNumber: entry.Certificate.Certificate.SerialNumber,
+			SerialNumber:   entry.Certificate.Certificate.SerialNumber,
 			RevocationTime: *entry.RevokedAt,
-			ReasonCode: entry.RevocationReason,
+			ReasonCode:     entry.RevocationReason,
 		})
 	}
 	now := time.Now().UTC()
@@ -266,11 +266,11 @@ func (s *Service) CRLPEM() ([]byte, error) {
 		return nil, fmt.Errorf("generate CRL number: %w", err)
 	}
 	der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
-		SignatureAlgorithm: s.intermediate.Certificate.SignatureAlgorithm,
+		SignatureAlgorithm:        s.intermediate.Certificate.SignatureAlgorithm,
 		RevokedCertificateEntries: entries,
-		Number: number,
-		ThisUpdate: now,
-		NextUpdate: now.Add(24 * time.Hour),
+		Number:                    number,
+		ThisUpdate:                now,
+		NextUpdate:                now.Add(24 * time.Hour),
 	}, s.intermediate.Certificate, s.intermediate.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("create CRL: %w", err)
