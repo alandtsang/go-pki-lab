@@ -21,6 +21,7 @@ type Issuance struct {
 	root         *ca.Authority
 	intermediate *ca.Authority
 	dnsServer    string
+	stateStore   StateStore
 
 	mu                  sync.RWMutex
 	challengeStatus     map[string]string
@@ -30,6 +31,17 @@ type Issuance struct {
 }
 
 func NewIssuance(server *Server, root, intermediate *ca.Authority, dnsServer string) (*Issuance, error) {
+	return newIssuance(server, root, intermediate, dnsServer, nil)
+}
+
+func NewIssuanceWithStore(server *Server, root, intermediate *ca.Authority, dnsServer string, store StateStore) (*Issuance, error) {
+	if store == nil {
+		return nil, fmt.Errorf("ACME state store is required")
+	}
+	return newIssuance(server, root, intermediate, dnsServer, store)
+}
+
+func newIssuance(server *Server, root, intermediate *ca.Authority, dnsServer string, store StateStore) (*Issuance, error) {
 	if server == nil {
 		return nil, fmt.Errorf("ACME server is required")
 	}
@@ -42,16 +54,38 @@ func NewIssuance(server *Server, root, intermediate *ca.Authority, dnsServer str
 	if strings.TrimSpace(dnsServer) == "" {
 		return nil, fmt.Errorf("DNS server address is required")
 	}
-	return &Issuance{
+	i := &Issuance{
 		server:              server,
 		root:                root,
 		intermediate:        intermediate,
 		dnsServer:           dnsServer,
+		stateStore:          store,
 		challengeStatus:     make(map[string]string),
 		authorizationStatus: make(map[string]string),
 		validatedAt:         make(map[string]time.Time),
 		certificates:        make(map[string][]byte),
-	}, nil
+	}
+	if store != nil {
+		state, err := store.Load()
+		if err != nil {
+			return nil, err
+		}
+		for id, record := range state.Issuance {
+			if record.ChallengeStatus != "" {
+				i.challengeStatus[id] = record.ChallengeStatus
+			}
+			if record.AuthorizationStatus != "" {
+				i.authorizationStatus[id] = record.AuthorizationStatus
+			}
+			if record.ValidatedAt != nil {
+				i.validatedAt[id] = *record.ValidatedAt
+			}
+			if len(record.CertificatePEM) > 0 {
+				i.certificates[id] = append([]byte(nil), record.CertificatePEM...)
+			}
+		}
+	}
+	return i, nil
 }
 
 func (i *Issuance) HandleChallenge(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +106,14 @@ func (i *Issuance) HandleChallenge(w http.ResponseWriter, r *http.Request) {
 		i.challengeStatus[id] = "invalid"
 		i.authorizationStatus[id] = "invalid"
 		i.mu.Unlock()
-		i.setOrderStatus(id, "invalid")
+		if persistErr := i.persistIssuance(id); persistErr != nil {
+			i.server.respondProblem(w, http.StatusInternalServerError, "serverInternal", persistErr.Error())
+			return
+		}
+		if persistErr := i.setOrderStatus(id, "invalid"); persistErr != nil {
+			i.server.respondProblem(w, http.StatusInternalServerError, "serverInternal", persistErr.Error())
+			return
+		}
 		i.server.respondProblem(w, http.StatusUnauthorized, "unauthorized", err.Error())
 		return
 	}
@@ -83,7 +124,14 @@ func (i *Issuance) HandleChallenge(w http.ResponseWriter, r *http.Request) {
 	i.authorizationStatus[id] = "valid"
 	i.validatedAt[id] = now
 	i.mu.Unlock()
-	i.setOrderStatus(id, "ready")
+	if err := i.persistIssuance(id); err != nil {
+		i.server.respondProblem(w, http.StatusInternalServerError, "serverInternal", err.Error())
+		return
+	}
+	if err := i.setOrderStatus(id, "ready"); err != nil {
+		i.server.respondProblem(w, http.StatusInternalServerError, "serverInternal", err.Error())
+		return
+	}
 
 	i.server.addReplayNonce(w)
 	writeJSON(w, http.StatusOK, i.challengeResponse(order, "valid", &now))
@@ -183,7 +231,14 @@ func (i *Issuance) HandleFinalize(w http.ResponseWriter, r *http.Request) {
 	i.mu.Lock()
 	i.certificates[id] = append([]byte(nil), issued.FullChainPEM...)
 	i.mu.Unlock()
-	i.setOrderStatus(id, "valid")
+	if err := i.persistIssuance(id); err != nil {
+		i.server.respondProblem(w, http.StatusInternalServerError, "serverInternal", err.Error())
+		return
+	}
+	if err := i.setOrderStatus(id, "valid"); err != nil {
+		i.server.respondProblem(w, http.StatusInternalServerError, "serverInternal", err.Error())
+		return
+	}
 	order = i.server.getOrder(id)
 
 	i.server.addReplayNonce(w)
@@ -240,12 +295,38 @@ func (i *Issuance) verifyDNS01(order *Order) error {
 	return fmt.Errorf("DNS-01 TXT validation failed for _acme-challenge.%s", order.Domain)
 }
 
-func (i *Issuance) setOrderStatus(id, status string) {
+func (i *Issuance) setOrderStatus(id, status string) error {
 	i.server.mu.Lock()
-	defer i.server.mu.Unlock()
-	if order := i.server.orders[id]; order != nil {
-		order.Status = status
+	order := i.server.orders[id]
+	if order == nil {
+		i.server.mu.Unlock()
+		return fmt.Errorf("ACME order %s not found", id)
 	}
+	order.Status = status
+	copyOrder := *order
+	i.server.mu.Unlock()
+	return i.server.persistOrder(&copyOrder)
+}
+
+func (i *Issuance) persistIssuance(id string) error {
+	if i.stateStore == nil {
+		return nil
+	}
+	i.mu.RLock()
+	record := IssuanceRecord{
+		ChallengeStatus:     i.challengeStatus[id],
+		AuthorizationStatus: i.authorizationStatus[id],
+		CertificatePEM:      append([]byte(nil), i.certificates[id]...),
+	}
+	if value, ok := i.validatedAt[id]; ok {
+		copyValue := value
+		record.ValidatedAt = &copyValue
+	}
+	i.mu.RUnlock()
+	return i.stateStore.Update(func(state *PersistentState) error {
+		state.Issuance[id] = record
+		return nil
+	})
 }
 
 func (i *Issuance) statuses(id string) (challenge, authorization string, validatedAt *time.Time) {
