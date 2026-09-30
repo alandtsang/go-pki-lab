@@ -17,7 +17,7 @@ Phase 7  [done] Renewal + revocation + CRL + RFC 6960 OCSP
 Phase 8  [in progress] ACME protocol
          8.1 [done] Directory + Nonce + JWS + Account + Order
          8.2 [done] DNS-01 + Finalize CSR + Certificate download
-         8.3 [next] Standard-client compatibility and ACME persistence
+         8.3 [in progress] acme.sh compatibility + local DNS hook
 ```
 
 ## Architecture
@@ -192,19 +192,6 @@ keyAuthorization = token + "." + accountJWKThumbprint
 TXT value        = base64url(SHA256(keyAuthorization))
 ```
 
-For local experiments, TXT records can be written to the lab DNS server with:
-
-```bash
-curl -s -X POST http://127.0.0.1:8080/dns/txt \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "name":"_acme-challenge.hello.test",
-    "values":["<computed-acme-dns-value>"]
-  }'
-```
-
-The Finalize payload contains a base64url-encoded DER CSR. The server requires exactly one DNS SAN matching the ACME Order identifier.
-
 Certificate download returns:
 
 ```text
@@ -219,6 +206,63 @@ Content-Type: application/pem-certificate-chain
 ```
 
 The Root CA is intentionally not included in the served chain.
+
+## Phase 8.3: test with acme.sh
+
+A custom DNS API hook is included at:
+
+```text
+scripts/acme.sh/dns_go_pki_lab.sh
+```
+
+Install it into a normal acme.sh installation:
+
+```bash
+cp ./scripts/acme.sh/dns_go_pki_lab.sh \
+  ~/.acme.sh/dnsapi/dns_go_pki_lab.sh
+```
+
+Then issue one local certificate:
+
+```bash
+export GO_PKI_LAB_API=http://127.0.0.1:8080
+
+~/.acme.sh/acme.sh --issue \
+  --server http://127.0.0.1:8080/acme/directory \
+  --dns dns_go_pki_lab \
+  --dnssleep 1 \
+  -d hello.test \
+  --keylength ec-256 \
+  --accountkeylength ec-256 \
+  --force \
+  --debug 2
+```
+
+`--dnssleep 1` is important for this lab because acme.sh normally checks DNS propagation through public DNS/DoH, while go-pki-lab intentionally exposes the challenge only on the local authoritative server at `127.0.0.1:1053`.
+
+The hook automatically performs:
+
+```text
+acme.sh
+   |
+   +--> dns_go_pki_lab_add
+   |       |
+   |       `--> POST /dns/txt
+   |
+   +--> ACME challenge validation
+   |       |
+   |       `--> local DNS :1053
+   |
+   `--> dns_go_pki_lab_rm
+           |
+           `--> DELETE /dns/txt
+```
+
+Detailed instructions and troubleshooting:
+
+```text
+docs/phase8-acmesh.md
+```
 
 ## ACME tests
 
@@ -250,7 +294,7 @@ Run all tests:
 go test ./...
 ```
 
-See the detailed ACME notes in:
+See the protocol details in:
 
 ```text
 docs/phase8-acme.md
@@ -261,12 +305,13 @@ docs/phase8-acme.md
 The original platform flow remains available for learning and comparison:
 
 ```text
-POST /orders
-GET  /orders/{id}
-POST /orders/{id}/validate
-POST /orders/{id}/issue
-POST /dns/txt
-GET  /dns/txt
+POST   /orders
+GET    /orders/{id}
+POST   /orders/{id}/validate
+POST   /orders/{id}/issue
+POST   /dns/txt
+GET    /dns/txt
+DELETE /dns/txt
 ```
 
 Client-side artifacts typically look like:
