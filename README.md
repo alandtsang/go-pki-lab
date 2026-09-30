@@ -1,6 +1,6 @@
 # go-pki-lab
 
-A Go-based local PKI and certificate authority lab for learning certificate chains, DNS-01 validation, CSR signing, TLS, persistence, renewal, revocation, CRL, OCSP, and certificate-platform workflows.
+A Go-based local PKI and certificate authority lab for learning certificate chains, DNS-01 validation, CSR signing, TLS, persistence, renewal, revocation, CRL, OCSP, ACME, and certificate-platform workflows.
 
 > Local research only. Do not use generated CA keys in production.
 
@@ -14,7 +14,8 @@ Phase 4  [done] Trusted local HTTPS
 Phase 5  [done] Client-owned private key + CSR signing
 Phase 6  [done] Persistent CA/order/certificate storage
 Phase 7  [done] Renewal + revocation + CRL + RFC 6960 OCSP
-Phase 8         ACME-compatible workflow experiments
+Phase 8  [in progress] ACME protocol
+         8.1 Directory + Nonce + JWS + Account + Order
 ```
 
 ## Current architecture
@@ -40,10 +41,16 @@ Certificate Platform API :8080
   +---- Intermediate CA signs CSR public key
   |
   +---- lifecycle
-          |-- renewal
-          |-- revocation
-          |-- CRL
-          `-- OCSP
+  |       |-- renewal
+  |       |-- revocation
+  |       |-- CRL
+  |       `-- OCSP
+  |
+  `---- ACME protocol
+          |-- directory / nonce
+          |-- JWS authentication
+          |-- account
+          `-- order / authorization
 ```
 
 The leaf private key never enters the CA platform.
@@ -69,6 +76,7 @@ Defaults:
 
 ```text
 HTTP API        : http://127.0.0.1:8080
+ACME directory  : http://127.0.0.1:8080/acme/directory
 DNS             : 127.0.0.1:1053/udp
 Persistent data : ./data
 ```
@@ -79,6 +87,65 @@ Use another data directory if needed:
 
 ```bash
 go run ./cmd/api-server -data-dir ./lab-data
+```
+
+## Phase 8.1 ACME protocol foundation
+
+The current ACME endpoints are:
+
+```text
+GET  /acme/directory
+HEAD /acme/new-nonce
+GET  /acme/new-nonce
+POST /acme/new-account
+POST /acme/acct/{id}
+POST /acme/new-order
+POST /acme/order/{id}
+POST /acme/authz/{id}
+```
+
+Discover the server:
+
+```bash
+curl -s http://127.0.0.1:8080/acme/directory | jq
+```
+
+Get a fresh nonce:
+
+```bash
+curl -i -X HEAD http://127.0.0.1:8080/acme/new-nonce
+```
+
+The ACME implementation validates flattened JSON JWS requests, one-time replay nonces, `url`, `jwk`/`kid`, and ES256 signatures. RSA/RS256 account keys are also supported for lab compatibility.
+
+Run the protocol tests:
+
+```bash
+go test ./internal/acme -v
+```
+
+Phase 8.1 does **not** yet complete certificate issuance through ACME. The next wiring step is:
+
+```text
+POST /acme/challenge/{id}
+        |
+        v
+DNS-01 validation through local DNS :1053
+        |
+        v
+POST /acme/finalize/{id} with CSR
+        |
+        v
+existing platform.Service + persistent Intermediate CA
+        |
+        v
+POST-as-GET /acme/cert/{id}
+```
+
+See:
+
+```text
+docs/phase8-acme.md
 ```
 
 ## Persistent server data
@@ -294,17 +361,7 @@ openssl ocsp \
   -resp_text
 ```
 
-Before revocation, the certificate status should be:
-
-```text
-good
-```
-
-After calling the revoke API, repeat the same command. The OCSP status should be:
-
-```text
-revoked
-```
+Before revocation, the certificate status should be `good`. After calling the revoke API, repeat the same command and the status should be `revoked`.
 
 The OCSP response is signed by the persistent Intermediate CA. For this lab stage, the Intermediate CA itself is the responder; a production design often uses a delegated OCSP signing certificate.
 
@@ -345,12 +402,17 @@ Still in memory:
 
 ```text
 Local DNS TXT records
+ACME nonces
+ACME accounts
+ACME protocol Orders
 ```
 
-After restart, a pending Order may require its TXT record to be published again.
+The ACME protocol storage is intentionally in-memory during Phase 8.1; it will be connected to persistent platform Orders as challenge/finalize issuance is implemented.
 
 ## Current limitations
 
+- ACME challenge/finalize/certificate resources are not wired yet
+- ACME account and protocol Order state are currently in memory
 - renewal currently reuses the original CSR/public key
 - CRL number is generated dynamically instead of using a persisted monotonic counter
 - no delta CRL
@@ -358,7 +420,7 @@ After restart, a pending Order may require its TXT record to be published again.
 - leaf certificates do not yet contain an OCSP Authority Information Access URL
 - OCSP nonce handling is not implemented; the OpenSSL demo uses `-no_nonce`
 - OCSP responses are signed directly by the Intermediate CA rather than a delegated responder certificate
-- no authentication/authorization around certificate issuance or revocation
+- no authentication/authorization around the non-ACME certificate issuance or revocation APIs
 - no KMS/HSM integration or production-grade CA key protection
 
 ## Legacy all-in-one CLI
