@@ -1,4 +1,4 @@
-# Phase 7 — Certificate lifecycle: renewal, revocation and CRL
+# Phase 7 — Certificate lifecycle: renewal, revocation, CRL and OCSP
 
 Phase 7 adds a minimal certificate lifecycle loop on top of the persistent CA platform.
 
@@ -9,10 +9,9 @@ Implemented:
 - certificate revocation with a reason code
 - revocation metadata persisted across API-server restarts
 - an X.509 CRL signed by the persistent Intermediate CA
+- an RFC 6960-compatible OCSP responder at `POST /ocsp`
 - renewal creates a fresh Order and fresh DNS-01 challenge
 - renewal reuses the existing CSR/public key for this lab stage
-
-> The status endpoint is an OCSP-style status API for experimentation. It is **not yet** an RFC 6960 DER OCSP responder. A standards-compatible OCSP responder can be added separately.
 
 ## API endpoints
 
@@ -21,7 +20,10 @@ POST /orders/{id}/renew
 POST /orders/{id}/revoke
 GET  /certificates/{serial}/status
 GET  /ca/crl
+POST /ocsp
 ```
+
+`GET /certificates/{serial}/status` is still useful as a human-readable JSON API. `POST /ocsp` is the binary OCSP protocol endpoint.
 
 ## 1. Find the issued certificate serial number
 
@@ -50,7 +52,7 @@ openssl x509 \
   -noout
 ```
 
-## 2. Query certificate status
+## 2. Query certificate status through the JSON API
 
 ```bash
 curl -s \
@@ -74,9 +76,61 @@ revoked
 expired
 ```
 
-## 3. Revoke an issued certificate
+## 3. Query the real OCSP responder
 
-Reason code `1` means `keyCompromise` in the X.509 CRL reason-code convention.
+The Intermediate CA is the issuer of the leaf certificate, so OpenSSL needs:
+
+```text
+issuer = data/ca/intermediate-ca.crt
+cert   = client/hello.test.crt
+OCSP   = http://127.0.0.1:8080/ocsp
+```
+
+Run:
+
+```bash
+openssl ocsp \
+  -issuer ./data/ca/intermediate-ca.crt \
+  -cert ./client/hello.test.crt \
+  -url http://127.0.0.1:8080/ocsp \
+  -CAfile ./data/ca/root-ca.crt \
+  -no_nonce \
+  -resp_text
+```
+
+Before revocation you should see a successful OCSP response whose certificate status is:
+
+```text
+good
+```
+
+The responder flow is:
+
+```text
+OpenSSL / TLS client
+        |
+        | DER OCSPRequest
+        v
+POST /ocsp
+        |
+        | parse issuer hashes + serial
+        v
+Persistent certificate state
+        |
+        | good / revoked / unknown
+        v
+Intermediate CA private key
+        |
+        | sign DER OCSPResponse
+        v
+OpenSSL / TLS client
+```
+
+The lab uses the Intermediate CA itself as the OCSP response signer. A production CA often uses a delegated responder certificate with the `OCSPSigning` EKU.
+
+## 4. Revoke an issued certificate
+
+Reason code `1` means `keyCompromise` in the X.509/OCSP reason-code convention.
 
 ```bash
 curl -s -X POST \
@@ -95,7 +149,7 @@ The Order response now contains:
 }
 ```
 
-Query the serial again:
+Query the JSON status again:
 
 ```bash
 curl -s \
@@ -111,9 +165,29 @@ Expected:
 }
 ```
 
+Now repeat the same OpenSSL OCSP command:
+
+```bash
+openssl ocsp \
+  -issuer ./data/ca/intermediate-ca.crt \
+  -cert ./client/hello.test.crt \
+  -url http://127.0.0.1:8080/ocsp \
+  -CAfile ./data/ca/root-ca.crt \
+  -no_nonce \
+  -resp_text
+```
+
+The OCSP certificate status should now be:
+
+```text
+revoked
+```
+
+and the response should contain the stored revocation time and reason.
+
 Revocation metadata is persisted in `data/orders/<order-id>.json` and survives API-server restarts.
 
-## 4. Download and inspect the CRL
+## 5. Download and inspect the CRL
 
 ```bash
 curl -s http://127.0.0.1:8080/ca/crl \
@@ -131,13 +205,7 @@ openssl crl \
 
 The revoked certificate serial should appear under `Revoked Certificates`.
 
-Verify that the CRL was signed by the Intermediate CA. The Intermediate certificate is stored by the lab server at:
-
-```text
-data/ca/intermediate-ca.crt
-```
-
-For local experimentation:
+Verify the CRL signature with the Intermediate CA:
 
 ```bash
 openssl crl \
@@ -148,7 +216,7 @@ openssl crl \
 
 The CRL is generated dynamically from persisted revocation records. `This Update` is the current time and `Next Update` is 24 hours later.
 
-## 5. Renew a certificate
+## 6. Renew a certificate
 
 Renewal does **not** silently replace the existing certificate. It creates a new Order with a new ID and a new DNS-01 challenge:
 
@@ -207,8 +275,10 @@ Certificate A (good)
 Certificate A          New Order
 (revoked)                 |
     |                     | DNS-01 + issue
-    v                     v
-CRL entry             Certificate B (good)
+    |                     v
+    +--> CRL          Certificate B (good)
+    |
+    +--> OCSP = revoked
 ```
 
 ## Current limitations
@@ -217,7 +287,9 @@ CRL entry             Certificate B (good)
 - the CRL number is generated when the CRL endpoint is called rather than stored as a monotonically increasing CA counter
 - no delta CRL
 - no CRL Distribution Point extension is embedded in leaf certificates yet
-- the status API is not yet a standards-compatible RFC 6960 OCSP responder
+- no OCSP URL (Authority Information Access) is embedded in leaf certificates yet
+- the OCSP responder uses the Intermediate CA directly instead of a delegated responder certificate
+- OCSP nonce handling is not implemented, so the OpenSSL demo uses `-no_nonce`
 - no authentication/authorization around revocation operations
 
-These are good follow-up experiments before or alongside the ACME phase.
+These are good follow-up experiments before the ACME phase.
