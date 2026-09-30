@@ -17,7 +17,8 @@ Phase 7  [done] Renewal + revocation + CRL + RFC 6960 OCSP
 Phase 8  [in progress] ACME protocol
          8.1 [done] Directory + Nonce + JWS + Account + Order
          8.2 [done] DNS-01 + Finalize CSR + Certificate download
-         8.3 [in progress] acme.sh compatibility + local DNS hook
+         8.3 [done] acme.sh end-to-end compatibility + local DNS hook
+         8.4 [done] Persistent ACME Account/Order/issuance state
 ```
 
 ## Architecture
@@ -36,6 +37,14 @@ Phase 8  [in progress] ACME protocol
                   data/ca/root-ca.{crt,key}
             data/ca/intermediate-ca.{crt,key}
                                |
+                     +---------+---------+
+                     |                   |
+                     v                   v
+              platform Orders       ACME state
+              data/orders/*      data/acme/state.json
+                     |                   |
+                     +---------+---------+
+                               |
                                v
                      Local DNS :1053/udp
                                |
@@ -49,7 +58,7 @@ Phase 8  [in progress] ACME protocol
                     Leaf + Intermediate chain
 ```
 
-The leaf private key stays on the client side.
+The leaf private key and ACME account private key stay on the client side.
 
 ## Requirements
 
@@ -73,9 +82,10 @@ HTTP API        : http://127.0.0.1:8080
 ACME directory  : http://127.0.0.1:8080/acme/directory
 DNS             : 127.0.0.1:1053/udp
 Persistent data : ./data
+ACME state      : ./data/acme/state.json
 ```
 
-The first startup creates the Root and Intermediate CA. Later startups load the same CA from disk.
+The first startup creates the Root and Intermediate CA. Later startups load the same CA and ACME protocol state from disk.
 
 ## Persistent server data
 
@@ -86,8 +96,10 @@ data/
 │   ├── root-ca.key
 │   ├── intermediate-ca.crt
 │   └── intermediate-ca.key
-└── orders/
-    └── <platform-order-id>.json
+├── orders/
+│   └── <platform-order-id>.json
+└── acme/
+    └── state.json
 ```
 
 `data/` is ignored by Git. Never commit or distribute CA private keys.
@@ -122,67 +134,24 @@ POST /acme/finalize/{id}
 POST /acme/cert/{id}
 ```
 
-Discover the server:
-
-```bash
-curl -s http://127.0.0.1:8080/acme/directory | jq
-```
-
-Get a nonce:
-
-```bash
-curl -i -X HEAD http://127.0.0.1:8080/acme/new-nonce
-```
-
-The implementation validates flattened JSON JWS, `Replay-Nonce`, `url`, `jwk`/`kid`, ES256 signatures, and RS256 signatures for lab compatibility.
+The implementation validates flattened JSON JWS, one-time `Replay-Nonce`, `url`, `jwk`/`kid`, ES256 signatures, and RS256 signatures for lab compatibility.
 
 ## ACME end-to-end flow
 
 ```text
 Directory
-   |
-   v
-Nonce
-   |
-   v
-newAccount
-   |
-   v
-newOrder(hello.test)
-   |
-   v
-Authorization + dns-01 token
-   |
-   v
-_acme-challenge.hello.test TXT
-   |
-   v
-POST challenge
-   |
-   v
-DNS lookup through local DNS :1053
-   |
-   v
-Authorization = valid
-Order = ready
-   |
-   v
-POST finalize { csr }
-   |
-   v
-CSR signature + SAN validation
-   |
-   v
-Persistent Intermediate CA signs CSR
-   |
-   v
-Order = valid
-   |
-   v
-POST-as-GET certificate URL
-   |
-   v
-Leaf + Intermediate PEM chain
+   -> Nonce
+   -> newAccount
+   -> newOrder
+   -> Authorization + dns-01 token
+   -> local TXT publication
+   -> POST challenge
+   -> Order ready
+   -> Finalize CSR
+   -> Persistent Intermediate CA signs CSR
+   -> Order valid
+   -> POST-as-GET certificate URL
+   -> Leaf + Intermediate PEM chain
 ```
 
 ACME DNS-01 uses the standard value:
@@ -192,37 +161,24 @@ keyAuthorization = token + "." + accountJWKThumbprint
 TXT value        = base64url(SHA256(keyAuthorization))
 ```
 
-Certificate download returns:
+Certificate download returns a PEM chain containing Leaf + Intermediate. The Root CA is intentionally not included.
 
-```text
-Content-Type: application/pem-certificate-chain
+## Test with acme.sh
 
------BEGIN CERTIFICATE-----
-<leaf>
------END CERTIFICATE-----
------BEGIN CERTIFICATE-----
-<intermediate>
------END CERTIFICATE-----
-```
-
-The Root CA is intentionally not included in the served chain.
-
-## Phase 8.3: test with acme.sh
-
-A custom DNS API hook is included at:
+A custom DNS hook is included at:
 
 ```text
 scripts/acme.sh/dns_go_pki_lab.sh
 ```
 
-Install it into a normal acme.sh installation:
+Install it:
 
 ```bash
 cp ./scripts/acme.sh/dns_go_pki_lab.sh \
   ~/.acme.sh/dnsapi/dns_go_pki_lab.sh
 ```
 
-Then issue one local certificate:
+Then issue a local certificate:
 
 ```bash
 export GO_PKI_LAB_API=http://127.0.0.1:8080
@@ -238,41 +194,72 @@ export GO_PKI_LAB_API=http://127.0.0.1:8080
   --debug 2
 ```
 
-`--dnssleep 1` is important for this lab because acme.sh normally checks DNS propagation through public DNS/DoH, while go-pki-lab intentionally exposes the challenge only on the local authoritative server at `127.0.0.1:1053`.
+`--dnssleep 1` is important because the lab TXT record exists only on the local authoritative DNS server, not on public DNS/DoH resolvers.
 
 The hook automatically performs:
 
 ```text
-acme.sh
-   |
-   +--> dns_go_pki_lab_add
-   |       |
-   |       `--> POST /dns/txt
-   |
-   +--> ACME challenge validation
-   |       |
-   |       `--> local DNS :1053
-   |
-   `--> dns_go_pki_lab_rm
-           |
-           `--> DELETE /dns/txt
+dns_go_pki_lab_add -> POST /dns/txt
+ACME validation     -> local DNS :1053
+dns_go_pki_lab_rm  -> DELETE /dns/txt
 ```
 
-Detailed instructions and troubleshooting:
+Detailed acme.sh instructions:
 
 ```text
 docs/phase8-acmesh.md
 ```
 
-## ACME tests
+## ACME persistence and restart recovery
 
-Run:
+ACME protocol state is stored in:
+
+```text
+data/acme/state.json
+```
+
+Persisted:
+
+```text
+Account ID
+Account status/contact
+Account public JWK + thumbprint
+ACME Orders
+challenge token + DNS-01 value
+Order status
+Challenge status
+Authorization status
+validation timestamp
+ACME-issued PEM certificate chain
+```
+
+Not persisted:
+
+```text
+Replay-Nonce values
+Local DNS TXT records
+```
+
+Nonces are intentionally short-lived and single-use. A pending DNS-01 challenge may need its TXT record republished after restart.
+
+The ACME state file is written atomically and uses file mode `0600`. It contains only the account public JWK; the account private key remains with the ACME client.
+
+Important migration note: Accounts created before Phase 8.4 were never stored server-side, so they cannot be restored retroactively. After one fresh registration on this version, future restarts reuse the same account.
+
+Restart test and details:
+
+```text
+docs/phase8-acme-persistence.md
+```
+
+## ACME tests
 
 ```bash
 go test ./internal/acme -v
+go test ./...
 ```
 
-The end-to-end test covers real cryptographic operations:
+The ACME tests cover real cryptographic operations and persistence:
 
 ```text
 P-256 account key
@@ -286,18 +273,9 @@ P-256 account key
 -> CA signing
 -> certificate download
 -> X.509 chain verification
-```
-
-Run all tests:
-
-```bash
-go test ./...
-```
-
-See the protocol details in:
-
-```text
-docs/phase8-acme.md
+-> state save/load
+-> JWK public-key reconstruction
+-> order/lifecycle/certificate restoration
 ```
 
 ## Non-ACME certificate API
@@ -314,26 +292,6 @@ GET    /dns/txt
 DELETE /dns/txt
 ```
 
-Client-side artifacts typically look like:
-
-```text
-client/
-├── hello.test.key
-├── hello.test.csr
-├── hello.test.crt
-├── fullchain.pem
-└── issue-response.json
-```
-
-Verify a certificate against the persistent Root CA:
-
-```bash
-openssl verify \
-  -CAfile ./data/ca/root-ca.crt \
-  -untrusted ./client/fullchain.pem \
-  ./client/hello.test.crt
-```
-
 ## Local HTTPS
 
 Map:
@@ -342,7 +300,7 @@ Map:
 127.0.0.1 hello.test
 ```
 
-Start HTTPS:
+Start HTTPS with a client-owned key and issued full chain:
 
 ```bash
 go run ./cmd/https-server \
@@ -388,38 +346,14 @@ openssl ocsp \
 
 Before revocation the status should be `good`; after revocation it should be `revoked`.
 
-## Persistence behavior
-
-Persistent today:
-
-```text
-Root CA
-Intermediate CA
-non-ACME platform Orders
-issued platform certificates
-revocation state
-renewal relationships
-```
-
-Still in memory:
-
-```text
-Local DNS TXT records
-ACME nonces
-ACME accounts
-ACME protocol Orders
-ACME-issued certificate response state
-```
-
-Therefore restarting `api-server` preserves the CA trust anchor, but currently discards active ACME protocol sessions and ACME account/order state.
-
 ## Current limitations
 
 - one DNS identifier per ACME Order
 - DNS-01 only
 - no wildcard-specific ACME behavior yet
-- ACME account/order state is not persistent yet
-- challenge validation is synchronous
+- local DNS TXT records are not persistent
+- ACME challenge validation is synchronous
+- persisted ACME resource URLs assume the same externally visible ACME base URL after restart
 - no account key rollover
 - no ACME revocation endpoint yet
 - no External Account Binding
