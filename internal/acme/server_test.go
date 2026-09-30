@@ -37,7 +37,6 @@ func TestACMEAccountAndOrderFlow(t *testing.T) {
 	nonce := fetchNonce(t, server.URL)
 	accountURL := server.URL + "/acme/new-account"
 	accountBody := signES256JWS(t, key, accountURL, nonce, "", jwkValue, []byte(`{"termsOfServiceAgreed":true}`))
-	accountBody = bytes.ReplaceAll(accountBody, []byte(`\\"`), []byte(`\"`))
 	accountResp := doPOST(t, accountURL, accountBody)
 	if accountResp.StatusCode != http.StatusCreated {
 		t.Fatalf("newAccount status = %d, body = %s", accountResp.StatusCode, accountResp.Body)
@@ -53,7 +52,6 @@ func TestACMEAccountAndOrderFlow(t *testing.T) {
 
 	orderURL := server.URL + "/acme/new-order"
 	orderPayload := []byte(`{"identifiers":[{"type":"dns","value":"hello.test"}]}`)
-	orderPayload = bytes.ReplaceAll(orderPayload, []byte(`\\"`), []byte(`\"`))
 	orderBody := signES256JWS(t, key, orderURL, nonce, kid, nil, orderPayload)
 	orderResp := doPOST(t, orderURL, orderBody)
 	if orderResp.StatusCode != http.StatusCreated {
