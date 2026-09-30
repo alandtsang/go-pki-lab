@@ -35,22 +35,60 @@ type Order struct {
 }
 
 type Server struct {
-	mu       sync.RWMutex
-	nonces   map[string]struct{}
-	accounts map[string]*Account
-	orders   map[string]*Order
-	mux      *http.ServeMux
+	mu         sync.RWMutex
+	nonces     map[string]struct{}
+	accounts   map[string]*Account
+	orders     map[string]*Order
+	stateStore StateStore
+	mux        *http.ServeMux
 }
 
 func NewServer() *Server {
+	s, _ := newServer(nil)
+	return s
+}
+
+func NewServerWithStore(store StateStore) (*Server, error) {
+	if store == nil {
+		return nil, fmt.Errorf("ACME state store is required")
+	}
+	return newServer(store)
+}
+
+func newServer(store StateStore) (*Server, error) {
 	s := &Server{
-		nonces:   make(map[string]struct{}),
-		accounts: make(map[string]*Account),
-		orders:   make(map[string]*Order),
-		mux:      http.NewServeMux(),
+		nonces:     make(map[string]struct{}),
+		accounts:   make(map[string]*Account),
+		orders:     make(map[string]*Order),
+		stateStore: store,
+		mux:        http.NewServeMux(),
+	}
+	if store != nil {
+		state, err := store.Load()
+		if err != nil {
+			return nil, err
+		}
+		for id, record := range state.Accounts {
+			publicKey, err := parseJWK(record.JWK)
+			if err != nil {
+				return nil, fmt.Errorf("restore ACME account %s: %w", id, err)
+			}
+			s.accounts[id] = &Account{
+				ID:         record.ID,
+				Status:     record.Status,
+				Contact:    append([]string(nil), record.Contact...),
+				JWK:        append(json.RawMessage(nil), record.JWK...),
+				Thumbprint: record.Thumbprint,
+				PublicKey:  publicKey,
+			}
+		}
+		for id, record := range state.Orders {
+			copyOrder := record
+			s.orders[id] = &copyOrder
+		}
 	}
 	s.routes()
-	return s
+	return s, nil
 }
 
 func (s *Server) Handler() http.Handler { return s.mux }
@@ -146,6 +184,13 @@ func (s *Server) handleNewAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	s.accounts[id] = account
 	s.mu.Unlock()
+	if err := s.persistAccount(account); err != nil {
+		s.mu.Lock()
+		delete(s.accounts, id)
+		s.mu.Unlock()
+		s.respondProblem(w, http.StatusInternalServerError, "serverInternal", err.Error())
+		return
+	}
 
 	location := absolutePathURL(r, "/acme/acct/"+id)
 	w.Header().Set("Location", location)
@@ -175,7 +220,14 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 		if update.Status == "deactivated" {
 			account.Status = "deactivated"
 		}
+		copyAccount := *account
+		copyAccount.Contact = append([]string(nil), account.Contact...)
+		copyAccount.JWK = append(json.RawMessage(nil), account.JWK...)
 		s.mu.Unlock()
+		if err := s.persistAccount(&copyAccount); err != nil {
+			s.respondProblem(w, http.StatusInternalServerError, "serverInternal", err.Error())
+			return
+		}
 	}
 	s.addReplayNonce(w)
 	writeJSON(w, http.StatusOK, accountResponse(account))
@@ -234,6 +286,13 @@ func (s *Server) handleNewOrder(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.orders[id] = order
 	s.mu.Unlock()
+	if err := s.persistOrder(order); err != nil {
+		s.mu.Lock()
+		delete(s.orders, id)
+		s.mu.Unlock()
+		s.respondProblem(w, http.StatusInternalServerError, "serverInternal", err.Error())
+		return
+	}
 
 	location := absolutePathURL(r, "/acme/order/"+id)
 	w.Header().Set("Location", location)
@@ -382,6 +441,34 @@ func (s *Server) getOrder(id string) *Order {
 	}
 	copyOrder := *order
 	return &copyOrder
+}
+
+func (s *Server) persistAccount(account *Account) error {
+	if s.stateStore == nil {
+		return nil
+	}
+	record := AccountRecord{
+		ID:         account.ID,
+		Status:     account.Status,
+		Contact:    append([]string(nil), account.Contact...),
+		JWK:        append(json.RawMessage(nil), account.JWK...),
+		Thumbprint: account.Thumbprint,
+	}
+	return s.stateStore.Update(func(state *PersistentState) error {
+		state.Accounts[record.ID] = record
+		return nil
+	})
+}
+
+func (s *Server) persistOrder(order *Order) error {
+	if s.stateStore == nil {
+		return nil
+	}
+	copyOrder := *order
+	return s.stateStore.Update(func(state *PersistentState) error {
+		state.Orders[copyOrder.ID] = copyOrder
+		return nil
+	})
 }
 
 func (s *Server) orderResponse(order *Order) map[string]any {
