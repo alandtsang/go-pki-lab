@@ -25,40 +25,31 @@ func (s *Service) OCSPResponse(requestDER []byte) ([]byte, error) {
 		ProducedAt:   now,
 	}
 
-	s.mu.RLock()
-	for _, entry := range s.orders {
-		if entry == nil || entry.Certificate == nil || entry.Certificate.Certificate == nil {
-			continue
-		}
-		cert := entry.Certificate.Certificate
-		if cert.SerialNumber.Cmp(req.SerialNumber) != 0 {
-			continue
-		}
-
+	state, found, err := s.findCertificateStateBySerial(req.SerialNumber)
+	if err != nil {
+		return nil, err
+	}
+	if found && state != nil && state.Certificate != nil {
+		cert := state.Certificate
 		expectedDER, err := ocsp.CreateRequest(cert, s.intermediate.Certificate, &ocsp.RequestOptions{Hash: req.HashAlgorithm})
 		if err != nil {
-			s.mu.RUnlock()
 			return nil, fmt.Errorf("build expected OCSP request: %w", err)
 		}
 		expected, err := ocsp.ParseRequest(expectedDER)
 		if err != nil {
-			s.mu.RUnlock()
 			return nil, fmt.Errorf("parse expected OCSP request: %w", err)
 		}
 		if !bytes.Equal(req.IssuerNameHash, expected.IssuerNameHash) || !bytes.Equal(req.IssuerKeyHash, expected.IssuerKeyHash) {
-			s.mu.RUnlock()
 			return nil, fmt.Errorf("OCSP request issuer does not match Intermediate CA")
 		}
 
 		template.Status = ocsp.Good
-		if entry.RevokedAt != nil {
+		if state.RevokedAt != nil {
 			template.Status = ocsp.Revoked
-			template.RevokedAt = *entry.RevokedAt
-			template.RevocationReason = entry.RevocationReason
+			template.RevokedAt = *state.RevokedAt
+			template.RevocationReason = state.RevocationReason
 		}
-		break
 	}
-	s.mu.RUnlock()
 
 	responseDER, err := ocsp.CreateResponse(
 		s.intermediate.Certificate,
