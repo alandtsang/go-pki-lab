@@ -23,6 +23,8 @@ type IssuanceRecord struct {
 	AuthorizationStatus string     `json:"authorization_status,omitempty"`
 	ValidatedAt         *time.Time `json:"validated_at,omitempty"`
 	CertificatePEM      []byte     `json:"certificate_pem,omitempty"`
+	RevokedAt           *time.Time `json:"revoked_at,omitempty"`
+	RevocationReason    int        `json:"revocation_reason,omitempty"`
 }
 
 type PersistentState struct {
