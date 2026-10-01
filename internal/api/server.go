@@ -47,6 +47,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /orders/{id}/issue", s.handleIssueOrder)
 	s.mux.HandleFunc("POST /orders/{id}/renew", s.handleRenewOrder)
 	s.mux.HandleFunc("POST /orders/{id}/revoke", s.handleRevokeOrder)
+	s.mux.HandleFunc("GET /certificates", s.handleCertificateHistory)
 	s.mux.HandleFunc("GET /certificates/{serial}/status", s.handleCertificateStatus)
 }
 
@@ -204,6 +205,24 @@ func (s *Server) handleRevokeOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, orderResponse(entry, false))
+}
+
+func (s *Server) handleCertificateHistory(w http.ResponseWriter, r *http.Request) {
+	domain := strings.TrimSpace(r.URL.Query().Get("domain"))
+	if domain == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("domain query parameter is required"))
+		return
+	}
+	history, err := s.service.CertificateHistory(domain)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"domain":       strings.TrimSuffix(domain, "."),
+		"count":        len(history),
+		"certificates": history,
+	})
 }
 
 func (s *Server) handleCertificateStatus(w http.ResponseWriter, r *http.Request) {
