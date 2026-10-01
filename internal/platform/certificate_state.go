@@ -11,9 +11,9 @@ import (
 )
 
 // CertificateState is a protocol-neutral certificate lifecycle view used by
-// status, CRL, OCSP, and history-query code. External issuers such as the ACME
-// layer can register a source without the platform package depending on them
-// directly.
+// status, CRL, OCSP, history-query, and certificate-instance code. External
+// issuers such as the ACME layer can register a source without the platform
+// package depending on them directly.
 type CertificateState struct {
 	Certificate      *x509.Certificate
 	Domain           string
@@ -32,6 +32,17 @@ type CertificateHistoryItem struct {
 	NotAfter         time.Time  `json:"not_after"`
 	RevokedAt        *time.Time `json:"revoked_at,omitempty"`
 	RevocationReason int        `json:"revocation_reason,omitempty"`
+}
+
+// DomainCertificateInstance is the platform-level view of one managed domain.
+// CurrentCertificate is the newest currently usable certificate, while History
+// retains every issued generation for audit and lifecycle decisions.
+type DomainCertificateInstance struct {
+	Domain             string                    `json:"domain"`
+	Status             string                    `json:"status"`
+	CurrentCertificate *CertificateHistoryItem   `json:"current_certificate"`
+	HistoryCount       int                       `json:"history_count"`
+	History            []CertificateHistoryItem  `json:"history"`
 }
 
 // CertificateStateSource exposes certificates issued outside platform Orders.
@@ -58,6 +69,38 @@ func CertificateSerialHex(cert *x509.Certificate) string {
 		return ""
 	}
 	return strings.ToUpper(hex.EncodeToString(cert.SerialNumber.Bytes()))
+}
+
+// DomainCertificateInstance returns the managed-certificate view for a domain.
+// The current certificate is the newest certificate whose lifecycle state is
+// good. Revoked, expired, not-yet-valid, failed, and pending generations are
+// never selected as current.
+func (s *Service) DomainCertificateInstance(domain string) (*DomainCertificateInstance, error) {
+	domain = strings.TrimSuffix(strings.TrimSpace(domain), ".")
+	if domain == "" {
+		return nil, fmt.Errorf("domain is required")
+	}
+
+	history, err := s.CertificateHistory(domain)
+	if err != nil {
+		return nil, err
+	}
+	instance := &DomainCertificateInstance{
+		Domain:       domain,
+		Status:       "no_active_certificate",
+		HistoryCount: len(history),
+		History:      history,
+	}
+	for idx := range history {
+		if history[idx].Status != "good" {
+			continue
+		}
+		current := history[idx]
+		instance.CurrentCertificate = &current
+		instance.Status = "active"
+		break
+	}
+	return instance, nil
 }
 
 // CertificateHistory returns every issued certificate generation for a domain,
