@@ -24,6 +24,7 @@ Phase 8  [done] ACME protocol
          8.7 [done] Domain certificate history + lifecycle query
 Phase 9  [in progress] Certificate platform capabilities
          9.1 [done] Domain certificate instance + current certificate selection
+         9.2 [done] Persistent renewal policy + renewal decision
 ```
 
 ## Architecture
@@ -60,6 +61,12 @@ Phase 9  [in progress] Certificate platform capabilities
                                            |
                                            v
                                   Current Certificate
+                                           |
+                                           v
+                                     Renewal Policy
+                                           |
+                                           v
+                                    Renewal Decision
 ```
 
 The leaf private key and ACME account private key stay on the client side.
@@ -87,9 +94,10 @@ ACME directory  : http://127.0.0.1:8080/acme/directory
 DNS             : 127.0.0.1:1053/udp
 Persistent data : ./data
 ACME state      : ./data/acme/state.json
+Renewal policies: ./data/renewal-policies/
 ```
 
-The first startup creates the Root and Intermediate CA. Later startups load the same CA and ACME protocol state from disk.
+The first startup creates the Root and Intermediate CA. Later startups load the same CA, ACME protocol state, and renewal policies from disk.
 
 ## Persistent server data
 
@@ -102,6 +110,8 @@ data/
 │   └── intermediate-ca.key
 ├── orders/
 │   └── <platform-order-id>.json
+├── renewal-policies/
+│   └── <domain-sha256>.json
 └── acme/
     └── state.json
 ```
@@ -316,9 +326,38 @@ Details:
 docs/phase9-certificate-instance.md
 ```
 
+## Renewal policy
+
+Configure a persistent policy for a managed domain:
+
+```bash
+curl -s -X PUT \
+  http://127.0.0.1:8080/domains/hello2.test/renewal-policy \
+  -H 'Content-Type: application/json' \
+  -d '{"auto_renew":true,"renew_before_days":30}' \
+  | jq
+```
+
+Read the policy and evaluate whether the current certificate is inside the renewal window:
+
+```bash
+curl -s http://127.0.0.1:8080/domains/hello2.test/renewal-policy | jq
+curl -s http://127.0.0.1:8080/domains/hello2.test/renewal-decision | jq
+```
+
+The decision is read-only in Phase 9.2. It does not yet create an ACME Order automatically.
+
+Details:
+
+```text
+docs/phase9-renewal-policy.md
+```
+
 ## Tests
 
 ```bash
+go test ./internal/platform -v
+go test ./internal/persistence -v
 go test ./internal/acme -v
 go test ./...
 ```
@@ -344,6 +383,8 @@ P-256 account key
 -> renewal/rotation
 -> certificate history
 -> current-certificate selection
+-> renewal policy persistence
+-> renewal-window decision
 ```
 
 ## Non-ACME certificate API
@@ -392,6 +433,9 @@ POST /orders/{id}/revoke
 GET  /certificates?domain={domain}
 GET  /certificates/{serial}/status
 GET  /domains/{domain}/certificate-instance
+GET  /domains/{domain}/renewal-policy
+PUT  /domains/{domain}/renewal-policy
+GET  /domains/{domain}/renewal-decision
 GET  /ca/crl
 POST /ocsp
 ```
@@ -426,8 +470,8 @@ Before revocation the status should be `good`; after revocation it should be `re
 - persisted ACME resource URLs assume the same externally visible ACME base URL after restart
 - no account key rollover
 - no External Account Binding
-- no persisted renewal policy yet
 - no automatic renewal scheduler yet
+- no renewal executor yet
 - no deployment target abstraction yet
 - renewal in the non-ACME API currently reuses the original CSR/public key
 - CRL number is not yet a persisted monotonic counter
