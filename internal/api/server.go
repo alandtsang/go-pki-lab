@@ -49,6 +49,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /orders/{id}/revoke", s.handleRevokeOrder)
 	s.mux.HandleFunc("GET /certificates", s.handleCertificateHistory)
 	s.mux.HandleFunc("GET /certificates/{serial}/status", s.handleCertificateStatus)
+	s.mux.HandleFunc("GET /domains/{domain}/certificate-instance", s.handleDomainCertificateInstance)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -232,6 +233,15 @@ func (s *Server) handleCertificateStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) handleDomainCertificateInstance(w http.ResponseWriter, r *http.Request) {
+	instance, err := s.service.DomainCertificateInstance(r.PathValue("domain"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, instance)
 }
 
 func orderResponse(entry *platform.Entry, includeCertificate bool) map[string]any {
