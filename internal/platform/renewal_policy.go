@@ -129,7 +129,7 @@ func (s *Service) RenewalDecision(domain string) (RenewalDecision, error) {
 
 	remaining := time.Until(instance.CurrentCertificate.NotAfter)
 	days := int(remaining.Hours() / 24)
-	if remaining > 0 && remaining% (24*time.Hour) != 0 {
+	if remaining > 0 && remaining%(24*time.Hour) != 0 {
 		days++
 	}
 	decision.DaysRemaining = &days
