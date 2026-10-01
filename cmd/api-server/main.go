@@ -63,13 +63,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	service.AddCertificateStateSource(acmeIssuance)
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /acme/directory", acmeServer.HandleDirectory)
 	mux.HandleFunc("POST /acme/challenge/{id}", acmeIssuance.HandleChallenge)
 	mux.HandleFunc("POST /acme/authz/{id}", acmeIssuance.HandleAuthorization)
 	mux.HandleFunc("POST /acme/order/{id}", acmeIssuance.HandleOrder)
 	mux.HandleFunc("POST /acme/finalize/{id}", acmeIssuance.HandleFinalize)
 	mux.HandleFunc("POST /acme/cert/{id}", acmeIssuance.HandleCertificate)
+	mux.HandleFunc("POST /acme/revoke-cert", acmeIssuance.HandleRevokeCertificate)
 	mux.Handle("/acme/", acmeServer.Handler())
 	mux.Handle("/", apiServer.Handler())
 
