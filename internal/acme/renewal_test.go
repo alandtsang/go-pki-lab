@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,7 +77,6 @@ func TestACMERenewalKeepsCertificateHistoryIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(10 * time.Millisecond)
 	newCSR, err := csr.Generate("hello.test")
 	if err != nil {
 		t.Fatal(err)
@@ -142,11 +142,13 @@ func TestACMERenewalKeepsCertificateHistoryIndependent(t *testing.T) {
 	for _, item := range history {
 		statuses[item.SerialNumber] = item.Status
 	}
-	if statuses[oldCert.Certificate.SerialNumber.Text(16)] != "revoked" {
-		t.Fatalf("old certificate history status = %q", statuses[oldCert.Certificate.SerialNumber.Text(16)])
+	oldSerial := strings.ToUpper(oldCert.Certificate.SerialNumber.Text(16))
+	newSerial := strings.ToUpper(newCert.Certificate.SerialNumber.Text(16))
+	if statuses[oldSerial] != "revoked" {
+		t.Fatalf("old certificate history status = %q", statuses[oldSerial])
 	}
-	if statuses[newCert.Certificate.SerialNumber.Text(16)] != "good" {
-		t.Fatalf("new certificate history status = %q", statuses[newCert.Certificate.SerialNumber.Text(16)])
+	if statuses[newSerial] != "good" {
+		t.Fatalf("new certificate history status = %q", statuses[newSerial])
 	}
 
 	reloadedServer, err := NewServerWithStore(stateStore)
