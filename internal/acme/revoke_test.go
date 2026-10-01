@@ -1,11 +1,11 @@
 package acme
 
 import (
-	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -194,5 +194,3 @@ func signCertificateKeyJWS(t *testing.T, key *ecdsa.PrivateKey, url, nonce strin
 	}
 	return envelope
 }
-
-var _ = bytes.Equal
