@@ -4,13 +4,16 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/alandtsang/go-pki-lab/internal/ca"
+	"github.com/alandtsang/go-pki-lab/internal/platform"
 	mdns "github.com/miekg/dns"
 )
 
@@ -28,6 +31,8 @@ type Issuance struct {
 	authorizationStatus map[string]string
 	validatedAt         map[string]time.Time
 	certificates        map[string][]byte
+	revokedAt           map[string]time.Time
+	revocationReason    map[string]int
 }
 
 func NewIssuance(server *Server, root, intermediate *ca.Authority, dnsServer string) (*Issuance, error) {
@@ -64,6 +69,8 @@ func newIssuance(server *Server, root, intermediate *ca.Authority, dnsServer str
 		authorizationStatus: make(map[string]string),
 		validatedAt:         make(map[string]time.Time),
 		certificates:        make(map[string][]byte),
+		revokedAt:           make(map[string]time.Time),
+		revocationReason:    make(map[string]int),
 	}
 	if store != nil {
 		state, err := store.Load()
@@ -82,6 +89,10 @@ func newIssuance(server *Server, root, intermediate *ca.Authority, dnsServer str
 			}
 			if len(record.CertificatePEM) > 0 {
 				i.certificates[id] = append([]byte(nil), record.CertificatePEM...)
+			}
+			if record.RevokedAt != nil {
+				i.revokedAt[id] = *record.RevokedAt
+				i.revocationReason[id] = record.RevocationReason
 			}
 		}
 	}
@@ -230,6 +241,8 @@ func (i *Issuance) HandleFinalize(w http.ResponseWriter, r *http.Request) {
 
 	i.mu.Lock()
 	i.certificates[id] = append([]byte(nil), issued.FullChainPEM...)
+	delete(i.revokedAt, id)
+	delete(i.revocationReason, id)
 	i.mu.Unlock()
 	if err := i.persistIssuance(id); err != nil {
 		i.server.respondProblem(w, http.StatusInternalServerError, "serverInternal", err.Error())
@@ -317,10 +330,15 @@ func (i *Issuance) persistIssuance(id string) error {
 		ChallengeStatus:     i.challengeStatus[id],
 		AuthorizationStatus: i.authorizationStatus[id],
 		CertificatePEM:      append([]byte(nil), i.certificates[id]...),
+		RevocationReason:    i.revocationReason[id],
 	}
 	if value, ok := i.validatedAt[id]; ok {
 		copyValue := value
 		record.ValidatedAt = &copyValue
+	}
+	if value, ok := i.revokedAt[id]; ok {
+		copyValue := value
+		record.RevokedAt = &copyValue
 	}
 	i.mu.RUnlock()
 	return i.stateStore.Update(func(state *PersistentState) error {
@@ -366,4 +384,86 @@ func (i *Issuance) orderResponse(order *Order, r *http.Request) map[string]any {
 		response["certificate"] = absolutePathURL(r, "/acme/cert/"+order.ID)
 	}
 	return response
+}
+
+func (i *Issuance) FindCertificateBySerial(serial *big.Int) (*platform.CertificateState, bool, error) {
+	if serial == nil {
+		return nil, false, nil
+	}
+	i.mu.RLock()
+	chains := make(map[string][]byte, len(i.certificates))
+	for id, chain := range i.certificates {
+		chains[id] = append([]byte(nil), chain...)
+	}
+	revoked := make(map[string]time.Time, len(i.revokedAt))
+	for id, value := range i.revokedAt {
+		revoked[id] = value
+	}
+	reasons := make(map[string]int, len(i.revocationReason))
+	for id, value := range i.revocationReason {
+		reasons[id] = value
+	}
+	i.mu.RUnlock()
+
+	for id, chain := range chains {
+		cert, err := firstCertificate(chain)
+		if err != nil {
+			return nil, false, err
+		}
+		if cert.SerialNumber.Cmp(serial) != 0 {
+			continue
+		}
+		state := &platform.CertificateState{Certificate: cert, SourceID: id, RevocationReason: reasons[id]}
+		if order := i.server.getOrder(id); order != nil {
+			state.Domain = order.Domain
+		}
+		if value, ok := revoked[id]; ok {
+			copyValue := value
+			state.RevokedAt = &copyValue
+		}
+		return state, true, nil
+	}
+	return nil, false, nil
+}
+
+func (i *Issuance) RevokedCertificates() ([]platform.CertificateState, error) {
+	i.mu.RLock()
+	ids := make([]string, 0, len(i.revokedAt))
+	for id := range i.revokedAt {
+		ids = append(ids, id)
+	}
+	i.mu.RUnlock()
+
+	states := make([]platform.CertificateState, 0, len(ids))
+	for _, id := range ids {
+		i.mu.RLock()
+		chain := append([]byte(nil), i.certificates[id]...)
+		revokedAt := i.revokedAt[id]
+		reason := i.revocationReason[id]
+		i.mu.RUnlock()
+		cert, err := firstCertificate(chain)
+		if err != nil {
+			return nil, err
+		}
+		state := platform.CertificateState{Certificate: cert, SourceID: id, RevocationReason: reason}
+		copyValue := revokedAt
+		state.RevokedAt = &copyValue
+		if order := i.server.getOrder(id); order != nil {
+			state.Domain = order.Domain
+		}
+		states = append(states, state)
+	}
+	return states, nil
+}
+
+func firstCertificate(chain []byte) (*x509.Certificate, error) {
+	block, _ := pem.Decode(chain)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("ACME certificate chain does not start with a certificate")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse ACME certificate: %w", err)
+	}
+	return cert, nil
 }
