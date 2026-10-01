@@ -236,7 +236,7 @@ func (s *Service) CertificateStatus(serial string) (map[string]any, error) {
 		status = "expired"
 	}
 	return map[string]any{
-		"serial_number":     cert.SerialNumber.Text(16),
+		"serial_number":     CertificateSerialHex(cert),
 		"order_id":          state.SourceID,
 		"domain":            state.Domain,
 		"status":            status,
