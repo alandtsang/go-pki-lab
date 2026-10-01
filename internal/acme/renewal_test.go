@@ -5,7 +5,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -142,8 +141,8 @@ func TestACMERenewalKeepsCertificateHistoryIndependent(t *testing.T) {
 	for _, item := range history {
 		statuses[item.SerialNumber] = item.Status
 	}
-	oldSerial := strings.ToUpper(oldCert.Certificate.SerialNumber.Text(16))
-	newSerial := strings.ToUpper(newCert.Certificate.SerialNumber.Text(16))
+	oldSerial := platform.CertificateSerialHex(oldCert.Certificate)
+	newSerial := platform.CertificateSerialHex(newCert.Certificate)
 	if statuses[oldSerial] != "revoked" {
 		t.Fatalf("old certificate history status = %q", statuses[oldSerial])
 	}
