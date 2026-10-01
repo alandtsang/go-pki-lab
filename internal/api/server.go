@@ -248,7 +248,7 @@ func orderResponse(entry *platform.Entry, includeCertificate bool) map[string]an
 		resp["challenge"] = map[string]any{"type": "dns-01", "name": entry.Order.Challenge.Name, "value": entry.Order.Challenge.Token}
 	}
 	if entry.Certificate != nil && entry.Certificate.Certificate != nil {
-		resp["serial_number"] = entry.Certificate.Certificate.SerialNumber.Text(16)
+		resp["serial_number"] = platform.CertificateSerialHex(entry.Certificate.Certificate)
 		resp["not_after"] = entry.Certificate.Certificate.NotAfter
 	}
 	if includeCertificate && entry.Certificate != nil {
