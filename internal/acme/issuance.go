@@ -456,6 +456,52 @@ func (i *Issuance) RevokedCertificates() ([]platform.CertificateState, error) {
 	return states, nil
 }
 
+func (i *Issuance) CertificatesByDomain(domain string) ([]platform.CertificateState, error) {
+	domain = strings.TrimSuffix(strings.TrimSpace(domain), ".")
+	if domain == "" {
+		return nil, nil
+	}
+
+	i.mu.RLock()
+	chains := make(map[string][]byte, len(i.certificates))
+	for id, chain := range i.certificates {
+		chains[id] = append([]byte(nil), chain...)
+	}
+	revoked := make(map[string]time.Time, len(i.revokedAt))
+	for id, value := range i.revokedAt {
+		revoked[id] = value
+	}
+	reasons := make(map[string]int, len(i.revocationReason))
+	for id, value := range i.revocationReason {
+		reasons[id] = value
+	}
+	i.mu.RUnlock()
+
+	states := make([]platform.CertificateState, 0)
+	for id, chain := range chains {
+		order := i.server.getOrder(id)
+		if order == nil || !strings.EqualFold(strings.TrimSuffix(order.Domain, "."), domain) {
+			continue
+		}
+		cert, err := firstCertificate(chain)
+		if err != nil {
+			return nil, err
+		}
+		state := platform.CertificateState{
+			Certificate:      cert,
+			Domain:           order.Domain,
+			SourceID:         id,
+			RevocationReason: reasons[id],
+		}
+		if value, ok := revoked[id]; ok {
+			copyValue := value
+			state.RevokedAt = &copyValue
+		}
+		states = append(states, state)
+	}
+	return states, nil
+}
+
 func firstCertificate(chain []byte) (*x509.Certificate, error) {
 	block, _ := pem.Decode(chain)
 	if block == nil || block.Type != "CERTIFICATE" {
