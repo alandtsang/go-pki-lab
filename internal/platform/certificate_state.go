@@ -2,6 +2,7 @@ package platform
 
 import (
 	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"sort"
@@ -49,6 +50,16 @@ func (s *Service) AddCertificateStateSource(source CertificateStateSource) {
 	s.mu.Unlock()
 }
 
+// CertificateSerialHex returns the certificate serial in byte-preserving,
+// uppercase hexadecimal form. Unlike big.Int.Text(16), this preserves a
+// leading zero nibble inside the first serial byte, matching openssl -serial.
+func CertificateSerialHex(cert *x509.Certificate) string {
+	if cert == nil || cert.SerialNumber == nil {
+		return ""
+	}
+	return strings.ToUpper(hex.EncodeToString(cert.SerialNumber.Bytes()))
+}
+
 // CertificateHistory returns every issued certificate generation for a domain,
 // newest first. Pending/failed Orders are intentionally excluded because they
 // have no certificate identity yet.
@@ -93,7 +104,7 @@ func (s *Service) CertificateHistory(domain string) ([]CertificateHistoryItem, e
 		if state.Certificate == nil || state.Certificate.SerialNumber == nil {
 			continue
 		}
-		serial := strings.ToUpper(state.Certificate.SerialNumber.Text(16))
+		serial := CertificateSerialHex(state.Certificate)
 		if _, ok := seen[serial]; ok {
 			continue
 		}
