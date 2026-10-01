@@ -11,6 +11,7 @@ import (
 	"github.com/alandtsang/go-pki-lab/internal/ca"
 	"github.com/alandtsang/go-pki-lab/internal/csr"
 	localdns "github.com/alandtsang/go-pki-lab/internal/dns"
+	"github.com/alandtsang/go-pki-lab/internal/platform"
 )
 
 func TestACMERenewalKeepsCertificateHistoryIndependent(t *testing.T) {
@@ -42,6 +43,11 @@ func TestACMERenewalKeepsCertificateHistoryIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	service, err := platform.NewService(root, intermediate, dnsServer.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.AddCertificateStateSource(issuance)
 
 	accountKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -70,6 +76,7 @@ func TestACMERenewalKeepsCertificateHistoryIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	time.Sleep(10 * time.Millisecond)
 	newCSR, err := csr.Generate("hello.test")
 	if err != nil {
 		t.Fatal(err)
@@ -122,6 +129,24 @@ func TestACMERenewalKeepsCertificateHistoryIndependent(t *testing.T) {
 	}
 	if newState.RevokedAt != nil {
 		t.Fatalf("renewed certificate must remain good when old certificate is revoked: %#v", newState)
+	}
+
+	history, err := service.CertificateHistory("hello.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected two certificate generations, got %#v", history)
+	}
+	statuses := map[string]string{}
+	for _, item := range history {
+		statuses[item.SerialNumber] = item.Status
+	}
+	if statuses[oldCert.Certificate.SerialNumber.Text(16)] != "revoked" {
+		t.Fatalf("old certificate history status = %q", statuses[oldCert.Certificate.SerialNumber.Text(16)])
+	}
+	if statuses[newCert.Certificate.SerialNumber.Text(16)] != "good" {
+		t.Fatalf("new certificate history status = %q", statuses[newCert.Certificate.SerialNumber.Text(16)])
 	}
 
 	reloadedServer, err := NewServerWithStore(stateStore)
