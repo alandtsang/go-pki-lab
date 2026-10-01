@@ -150,6 +150,46 @@ func TestACMERenewalKeepsCertificateHistoryIndependent(t *testing.T) {
 		t.Fatalf("new certificate history status = %q", statuses[newSerial])
 	}
 
+	instance, err := service.DomainCertificateInstance("hello.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instance.Status != "active" {
+		t.Fatalf("certificate instance status = %q", instance.Status)
+	}
+	if instance.HistoryCount != 2 || len(instance.History) != 2 {
+		t.Fatalf("certificate instance history mismatch: %#v", instance)
+	}
+	if instance.CurrentCertificate == nil {
+		t.Fatal("current certificate must be selected")
+	}
+	if instance.CurrentCertificate.SerialNumber != newSerial {
+		t.Fatalf("current certificate serial = %q, want %q", instance.CurrentCertificate.SerialNumber, newSerial)
+	}
+	if instance.CurrentCertificate.Status != "good" {
+		t.Fatalf("current certificate status = %q", instance.CurrentCertificate.Status)
+	}
+
+	newRevokedAt := time.Now().UTC().Truncate(time.Second)
+	issuance.revokedAt[newOrder.ID] = newRevokedAt
+	issuance.revocationReason[newOrder.ID] = 1
+	if err := issuance.persistIssuance(newOrder.ID); err != nil {
+		t.Fatal(err)
+	}
+	instance, err = service.DomainCertificateInstance("hello.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instance.Status != "no_active_certificate" || instance.CurrentCertificate != nil {
+		t.Fatalf("all revoked certificates must leave no active certificate: %#v", instance)
+	}
+
+	delete(issuance.revokedAt, newOrder.ID)
+	delete(issuance.revocationReason, newOrder.ID)
+	if err := issuance.persistIssuance(newOrder.ID); err != nil {
+		t.Fatal(err)
+	}
+
 	reloadedServer, err := NewServerWithStore(stateStore)
 	if err != nil {
 		t.Fatal(err)
