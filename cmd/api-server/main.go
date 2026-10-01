@@ -46,6 +46,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	renewalPolicyRepository, err := persistence.NewRenewalPolicyRepository(filepath.Join(*dataDir, "renewal-policies"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := service.SetRenewalPolicyRepository(renewalPolicyRepository); err != nil {
+		log.Fatal(err)
+	}
 	apiServer, err := api.NewServer(service, store, root.CertPEM)
 	if err != nil {
 		log.Fatal(err)
@@ -90,6 +97,7 @@ func main() {
 		fmt.Printf("Root CA: http://%s/ca/root\n", *httpAddr)
 		fmt.Printf("Persistent data: %s\n", *dataDir)
 		fmt.Printf("ACME state: %s\n", filepath.Join(*dataDir, "acme", "state.json"))
+		fmt.Printf("Renewal policies: %s\n", filepath.Join(*dataDir, "renewal-policies"))
 		if created {
 			fmt.Printf("CA state: initialized new persistent CA\n")
 		} else {
