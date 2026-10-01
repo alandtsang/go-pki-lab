@@ -14,7 +14,7 @@ Phase 4  [done] Trusted local HTTPS
 Phase 5  [done] Client-owned private key + CSR signing
 Phase 6  [done] Persistent CA/order/certificate storage
 Phase 7  [done] Renewal + revocation + CRL + RFC 6960 OCSP
-Phase 8  [in progress] ACME protocol
+Phase 8  [done] ACME protocol
          8.1 [done] Directory + Nonce + JWS + Account + Order
          8.2 [done] DNS-01 + Finalize CSR + Certificate download
          8.3 [done] acme.sh end-to-end compatibility + local DNS hook
@@ -22,6 +22,8 @@ Phase 8  [in progress] ACME protocol
          8.5 [done] ACME revokeCert + unified CRL/OCSP/status
          8.6 [done] ACME renewal + certificate rotation
          8.7 [done] Domain certificate history + lifecycle query
+Phase 9  [in progress] Certificate platform capabilities
+         9.1 [done] Domain certificate instance + current certificate selection
 ```
 
 ## Architecture
@@ -49,16 +51,15 @@ Phase 8  [in progress] ACME protocol
                      +---------+---------+
                                |
                                v
-                     Local DNS :1053/udp
+                     CertificateState
                                |
-                               v
-                           DNS-01
-                               |
-                               v
-                     Intermediate CA signs CSR
-                               |
-                               v
-                    Leaf + Intermediate chain
+                   +-----------+-----------+
+                   |                       |
+                   v                       v
+          Certificate History      Certificate Instance
+                                           |
+                                           v
+                                  Current Certificate
 ```
 
 The leaf private key and ACME account private key stay on the client side.
@@ -285,14 +286,44 @@ Details:
 docs/phase8-certificate-history.md
 ```
 
-## ACME tests
+## Domain certificate instance
+
+Phase 9 introduces a platform-level certificate instance above protocol Orders.
+
+```text
+Domain
+  |
+  v
+Certificate Instance
+  |
+  +--> Current Certificate
+  `--> Certificate History
+```
+
+Query it with:
+
+```bash
+curl -s \
+  http://127.0.0.1:8080/domains/hello2.test/certificate-instance \
+  | jq
+```
+
+The current certificate is the newest issued generation whose lifecycle status is `good`. Revoked, expired, and not-yet-valid certificates are never selected as current.
+
+Details:
+
+```text
+docs/phase9-certificate-instance.md
+```
+
+## Tests
 
 ```bash
 go test ./internal/acme -v
 go test ./...
 ```
 
-The ACME tests cover real cryptographic operations and persistence:
+The tests cover real cryptographic operations and platform state:
 
 ```text
 P-256 account key
@@ -312,6 +343,7 @@ P-256 account key
 -> revocation
 -> renewal/rotation
 -> certificate history
+-> current-certificate selection
 ```
 
 ## Non-ACME certificate API
@@ -359,6 +391,7 @@ POST /orders/{id}/renew
 POST /orders/{id}/revoke
 GET  /certificates?domain={domain}
 GET  /certificates/{serial}/status
+GET  /domains/{domain}/certificate-instance
 GET  /ca/crl
 POST /ocsp
 ```
@@ -393,6 +426,9 @@ Before revocation the status should be `good`; after revocation it should be `re
 - persisted ACME resource URLs assume the same externally visible ACME base URL after restart
 - no account key rollover
 - no External Account Binding
+- no persisted renewal policy yet
+- no automatic renewal scheduler yet
+- no deployment target abstraction yet
 - renewal in the non-ACME API currently reuses the original CSR/public key
 - CRL number is not yet a persisted monotonic counter
 - no delta CRL
