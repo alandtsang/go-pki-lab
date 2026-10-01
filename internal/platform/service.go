@@ -35,12 +35,13 @@ type Repository interface {
 }
 
 type Service struct {
-	mu           sync.RWMutex
-	orders       map[string]*Entry
-	root         *ca.Authority
-	intermediate *ca.Authority
-	dnsServer    string
-	repository   Repository
+	mu                 sync.RWMutex
+	orders             map[string]*Entry
+	root               *ca.Authority
+	intermediate       *ca.Authority
+	dnsServer          string
+	repository         Repository
+	certificateSources []CertificateStateSource
 }
 
 func NewService(root, intermediate *ca.Authority, dnsServer string, repositories ...Repository) (*Service, error) {
@@ -216,48 +217,50 @@ func (s *Service) RevokeOrder(id string, reason int) (*Entry, error) {
 
 func (s *Service) CertificateStatus(serial string) (map[string]any, error) {
 	serial = strings.TrimSpace(strings.ToLower(serial))
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, entry := range s.orders {
-		if entry.Certificate == nil || entry.Certificate.Certificate == nil {
-			continue
-		}
-		cert := entry.Certificate.Certificate
-		if strings.ToLower(cert.SerialNumber.Text(16)) != serial {
-			continue
-		}
-		status := "good"
-		if entry.RevokedAt != nil {
-			status = "revoked"
-		} else if time.Now().After(cert.NotAfter) {
-			status = "expired"
-		}
-		return map[string]any{
-			"serial_number":     cert.SerialNumber.Text(16),
-			"order_id":          entry.ID,
-			"domain":            entry.Order.Domain,
-			"status":            status,
-			"not_before":        cert.NotBefore,
-			"not_after":         cert.NotAfter,
-			"revoked_at":        entry.RevokedAt,
-			"revocation_reason": entry.RevocationReason,
-		}, nil
+	serialNumber, ok := new(big.Int).SetString(serial, 16)
+	if !ok {
+		return nil, fmt.Errorf("invalid certificate serial %q", serial)
 	}
-	return nil, fmt.Errorf("certificate serial %q not found", serial)
+	state, found, err := s.findCertificateStateBySerial(serialNumber)
+	if err != nil {
+		return nil, err
+	}
+	if !found || state == nil || state.Certificate == nil {
+		return nil, fmt.Errorf("certificate serial %q not found", serial)
+	}
+	cert := state.Certificate
+	status := "good"
+	if state.RevokedAt != nil {
+		status = "revoked"
+	} else if time.Now().After(cert.NotAfter) {
+		status = "expired"
+	}
+	return map[string]any{
+		"serial_number":     cert.SerialNumber.Text(16),
+		"order_id":          state.SourceID,
+		"domain":            state.Domain,
+		"status":            status,
+		"not_before":        cert.NotBefore,
+		"not_after":         cert.NotAfter,
+		"revoked_at":        state.RevokedAt,
+		"revocation_reason": state.RevocationReason,
+	}, nil
 }
 
 func (s *Service) CRLPEM() ([]byte, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	entries := make([]x509.RevocationListEntry, 0)
-	for _, entry := range s.orders {
-		if entry.Certificate == nil || entry.Certificate.Certificate == nil || entry.RevokedAt == nil {
+	states, err := s.revokedCertificateStates()
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]x509.RevocationListEntry, 0, len(states))
+	for _, state := range states {
+		if state.Certificate == nil || state.RevokedAt == nil {
 			continue
 		}
 		entries = append(entries, x509.RevocationListEntry{
-			SerialNumber:   entry.Certificate.Certificate.SerialNumber,
-			RevocationTime: *entry.RevokedAt,
-			ReasonCode:     entry.RevocationReason,
+			SerialNumber:   state.Certificate.SerialNumber,
+			RevocationTime: *state.RevokedAt,
+			ReasonCode:     state.RevocationReason,
 		})
 	}
 	now := time.Now().UTC()
