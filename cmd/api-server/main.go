@@ -57,6 +57,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	renewalPolicyAPI, err := api.NewRenewalPolicyAPI(service)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	acmeStateStore, err := acme.NewFileStateStore(filepath.Join(*dataDir, "acme", "state.json"))
 	if err != nil {
@@ -81,6 +85,9 @@ func main() {
 	mux.HandleFunc("POST /acme/cert/{id}", acmeIssuance.HandleCertificate)
 	mux.HandleFunc("POST /acme/revoke-cert", acmeIssuance.HandleRevokeCertificate)
 	mux.Handle("/acme/", acmeServer.Handler())
+	mux.Handle("GET /domains/{domain}/renewal-policy", renewalPolicyAPI.Handler())
+	mux.Handle("PUT /domains/{domain}/renewal-policy", renewalPolicyAPI.Handler())
+	mux.Handle("GET /domains/{domain}/renewal-decision", renewalPolicyAPI.Handler())
 	mux.Handle("/", apiServer.Handler())
 
 	httpServer := &http.Server{
