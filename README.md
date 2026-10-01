@@ -19,6 +19,9 @@ Phase 8  [in progress] ACME protocol
          8.2 [done] DNS-01 + Finalize CSR + Certificate download
          8.3 [done] acme.sh end-to-end compatibility + local DNS hook
          8.4 [done] Persistent ACME Account/Order/issuance state
+         8.5 [done] ACME revokeCert + unified CRL/OCSP/status
+         8.6 [done] ACME renewal + certificate rotation
+         8.7 [done] Domain certificate history + lifecycle query
 ```
 
 ## Architecture
@@ -132,6 +135,7 @@ POST /acme/authz/{id}
 POST /acme/challenge/{id}
 POST /acme/finalize/{id}
 POST /acme/cert/{id}
+POST /acme/revoke-cert
 ```
 
 The implementation validates flattened JSON JWS, one-time `Replay-Nonce`, `url`, `jwk`/`kid`, ES256 signatures, and RS256 signatures for lab compatibility.
@@ -231,6 +235,7 @@ Challenge status
 Authorization status
 validation timestamp
 ACME-issued PEM certificate chain
+revocation timestamp/reason
 ```
 
 Not persisted:
@@ -244,12 +249,40 @@ Nonces are intentionally short-lived and single-use. A pending DNS-01 challenge 
 
 The ACME state file is written atomically and uses file mode `0600`. It contains only the account public JWK; the account private key remains with the ACME client.
 
-Important migration note: Accounts created before Phase 8.4 were never stored server-side, so they cannot be restored retroactively. After one fresh registration on this version, future restarts reuse the same account.
-
 Restart test and details:
 
 ```text
 docs/phase8-acme-persistence.md
+```
+
+## Certificate history
+
+Query every issued certificate generation for a DNS name:
+
+```bash
+curl -s \
+  'http://127.0.0.1:8080/certificates?domain=hello2.test' \
+  | jq
+```
+
+The result includes each independent certificate generation with:
+
+```text
+serial_number
+order_id
+status
+not_before
+not_after
+revoked_at
+revocation_reason
+```
+
+History is sorted newest-first and includes certificates issued through both the original platform flow and ACME.
+
+Details:
+
+```text
+docs/phase8-certificate-history.md
 ```
 
 ## ACME tests
@@ -276,6 +309,9 @@ P-256 account key
 -> state save/load
 -> JWK public-key reconstruction
 -> order/lifecycle/certificate restoration
+-> revocation
+-> renewal/rotation
+-> certificate history
 ```
 
 ## Non-ACME certificate API
@@ -321,6 +357,7 @@ curl --cacert ./data/ca/root-ca.crt https://hello.test:8443/
 ```text
 POST /orders/{id}/renew
 POST /orders/{id}/revoke
+GET  /certificates?domain={domain}
 GET  /certificates/{serial}/status
 GET  /ca/crl
 POST /ocsp
@@ -355,7 +392,6 @@ Before revocation the status should be `good`; after revocation it should be `re
 - ACME challenge validation is synchronous
 - persisted ACME resource URLs assume the same externally visible ACME base URL after restart
 - no account key rollover
-- no ACME revocation endpoint yet
 - no External Account Binding
 - renewal in the non-ACME API currently reuses the original CSR/public key
 - CRL number is not yet a persisted monotonic counter
