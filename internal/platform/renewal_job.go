@@ -3,11 +3,13 @@ package platform
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
 const (
 	RenewalJobStatusWaitingForClient = "waiting_for_client"
+	RenewalJobStatusRunning          = "running"
 	RenewalJobStatusCompleted        = "completed"
 	RenewalJobStatusFailed           = "failed"
 )
@@ -21,6 +23,8 @@ type RenewalJob struct {
 	RenewBeforeDays     int        `json:"renew_before_days"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
+	ClaimedAt           *time.Time `json:"claimed_at,omitempty"`
+	ClaimedBy           string     `json:"claimed_by,omitempty"`
 	CompletedAt         *time.Time `json:"completed_at,omitempty"`
 	ResultSerial        string     `json:"result_serial,omitempty"`
 	LastError           string     `json:"last_error,omitempty"`
@@ -93,6 +97,123 @@ func (s *Service) GetRenewalJob(id string) (RenewalJob, error) {
 	return job, nil
 }
 
+func (s *Service) ClaimRenewalJob(id, clientID string) (RenewalJob, error) {
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return RenewalJob{}, fmt.Errorf("client_id is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.renewalJobs[id]
+	if !ok {
+		return RenewalJob{}, fmt.Errorf("renewal job %q not found", id)
+	}
+	if job.Status == RenewalJobStatusRunning && job.ClaimedBy == clientID {
+		return job, nil
+	}
+	if job.Status != RenewalJobStatusWaitingForClient {
+		return RenewalJob{}, fmt.Errorf("renewal job %q cannot be claimed from status %q", id, job.Status)
+	}
+	if s.renewalJobRepository == nil {
+		return RenewalJob{}, fmt.Errorf("renewal job repository is not configured")
+	}
+
+	now := time.Now().UTC()
+	job.Status = RenewalJobStatusRunning
+	job.ClaimedBy = clientID
+	job.ClaimedAt = &now
+	job.UpdatedAt = now
+	job.LastError = ""
+	if err := s.renewalJobRepository.Save(job); err != nil {
+		return RenewalJob{}, err
+	}
+	s.renewalJobs[id] = job
+	return job, nil
+}
+
+func (s *Service) CompleteRenewalJob(id, resultSerial string) (RenewalJob, error) {
+	resultSerial = strings.ToUpper(strings.TrimSpace(resultSerial))
+	if resultSerial == "" {
+		return RenewalJob{}, fmt.Errorf("result_serial is required")
+	}
+
+	job, err := s.GetRenewalJob(id)
+	if err != nil {
+		return RenewalJob{}, err
+	}
+	if job.Status == RenewalJobStatusCompleted && job.ResultSerial == resultSerial {
+		return job, nil
+	}
+	if job.Status != RenewalJobStatusRunning {
+		return RenewalJob{}, fmt.Errorf("renewal job %q cannot complete from status %q", id, job.Status)
+	}
+	if strings.EqualFold(job.SourceSerial, resultSerial) {
+		return RenewalJob{}, fmt.Errorf("renewal result serial must differ from source serial")
+	}
+
+	instance, err := s.DomainCertificateInstance(job.Domain)
+	if err != nil {
+		return RenewalJob{}, err
+	}
+	if instance.CurrentCertificate == nil {
+		return RenewalJob{}, fmt.Errorf("domain %q has no active certificate after renewal", job.Domain)
+	}
+	if !strings.EqualFold(instance.CurrentCertificate.SerialNumber, resultSerial) {
+		return RenewalJob{}, fmt.Errorf("result serial %q is not the current certificate for %q", resultSerial, job.Domain)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job = s.renewalJobs[id]
+	if job.Status != RenewalJobStatusRunning {
+		return RenewalJob{}, fmt.Errorf("renewal job %q cannot complete from status %q", id, job.Status)
+	}
+	if s.renewalJobRepository == nil {
+		return RenewalJob{}, fmt.Errorf("renewal job repository is not configured")
+	}
+	now := time.Now().UTC()
+	job.Status = RenewalJobStatusCompleted
+	job.ResultSerial = resultSerial
+	job.CompletedAt = &now
+	job.UpdatedAt = now
+	job.LastError = ""
+	if err := s.renewalJobRepository.Save(job); err != nil {
+		return RenewalJob{}, err
+	}
+	s.renewalJobs[id] = job
+	return job, nil
+}
+
+func (s *Service) FailRenewalJob(id, message string) (RenewalJob, error) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return RenewalJob{}, fmt.Errorf("error is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.renewalJobs[id]
+	if !ok {
+		return RenewalJob{}, fmt.Errorf("renewal job %q not found", id)
+	}
+	if job.Status != RenewalJobStatusRunning {
+		return RenewalJob{}, fmt.Errorf("renewal job %q cannot fail from status %q", id, job.Status)
+	}
+	if s.renewalJobRepository == nil {
+		return RenewalJob{}, fmt.Errorf("renewal job repository is not configured")
+	}
+	now := time.Now().UTC()
+	job.Status = RenewalJobStatusFailed
+	job.LastError = message
+	job.UpdatedAt = now
+	if err := s.renewalJobRepository.Save(job); err != nil {
+		return RenewalJob{}, err
+	}
+	s.renewalJobs[id] = job
+	return job, nil
+}
+
 func (s *Service) RunRenewalScan() (RenewalScanResult, error) {
 	policies := s.configuredRenewalPolicies()
 	result := RenewalScanResult{ScannedPolicies: len(policies)}
@@ -146,7 +267,7 @@ func (s *Service) ensureRenewalJob(decision RenewalDecision) (RenewalJob, bool, 
 		return RenewalJob{}, false, fmt.Errorf("renewal job repository is not configured")
 	}
 	for _, job := range s.renewalJobs {
-		if job.Domain == domain && job.Status == RenewalJobStatusWaitingForClient {
+		if job.Domain == domain && (job.Status == RenewalJobStatusWaitingForClient || job.Status == RenewalJobStatusRunning) {
 			return job, false, nil
 		}
 	}
