@@ -26,7 +26,14 @@ func main() {
 	dataDir := flag.String("data-dir", "./data", "persistent data directory")
 	renewalScanInterval := flag.Duration("renewal-scan-interval", time.Minute, "renewal scheduler scan interval")
 	deploymentScanInterval := flag.Duration("deployment-scan-interval", 15*time.Second, "deployment reconciler scan interval")
+	monitorInterval := flag.Duration("monitor-interval", time.Minute, "certificate monitoring interval; non-positive disables")
+	monitorTimeout := flag.Duration("monitor-timeout", 5*time.Second, "per-target TLS probe timeout")
+	monitorExpiry := flag.Duration("monitor-expiring-before", 30*24*time.Hour, "certificate expiry warning window")
 	flag.Parse()
+	monitorOptions := platform.MonitoringOptions{Timeout: *monitorTimeout, ExpiringBefore: *monitorExpiry}
+	if *monitorTimeout <= 0 || *monitorExpiry < 0 {
+		log.Fatal("invalid monitoring options")
+	}
 
 	root, intermediate, created, err := loadOrCreateCA(filepath.Join(*dataDir, "ca"))
 	if err != nil {
@@ -88,7 +95,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	deploymentAPI, err := api.NewDeploymentAPI(service)
+	deploymentAPI, err := api.NewDeploymentAPIWithMonitoring(service, monitorOptions)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -125,6 +132,9 @@ func main() {
 	mux.Handle("POST /renewal-jobs/{id}/claim", renewalJobAPI.Handler())
 	mux.Handle("POST /renewal-jobs/{id}/complete", renewalJobAPI.Handler())
 	mux.Handle("POST /renewal-jobs/{id}/fail", renewalJobAPI.Handler())
+	mux.Handle("GET /deployment-targets/{id}/monitoring", deploymentAPI.Handler())
+	mux.Handle("POST /deployment-targets/{id}/probe", deploymentAPI.Handler())
+	mux.Handle("POST /certificate-monitor/run", deploymentAPI.Handler())
 	mux.Handle("POST /deployment-targets", deploymentAPI.Handler())
 	mux.Handle("GET /deployment-targets", deploymentAPI.Handler())
 	mux.Handle("GET /deployment-targets/{id}", deploymentAPI.Handler())
@@ -167,12 +177,22 @@ func main() {
 		}
 	}()
 
+	monitorCtx, stopMonitor := context.WithCancel(context.Background())
+	defer stopMonitor()
+	monitorDone := make(chan struct{})
+	go func() {
+		defer close(monitorDone)
+		service.RunMonitoring(monitorCtx, *monitorInterval, monitorOptions, func(err error) { log.Printf("certificate monitor: %v", err) })
+	}()
+
 	go runRenewalScheduler(service, *renewalScanInterval)
 	go runDeploymentReconciler(service, *deploymentScanInterval)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
+	stopMonitor()
+	<-monitorDone
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

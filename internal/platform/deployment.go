@@ -17,15 +17,16 @@ const (
 )
 
 type DeploymentTarget struct {
-	ID        string    `json:"id"`
-	Domain    string    `json:"domain"`
-	Type      string    `json:"type"`
-	Address   string    `json:"address"`
-	CertPath  string    `json:"cert_path"`
-	KeyPath   string    `json:"key_path"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Monitoring MonitoringState `json:"monitoring"`
+	ID         string          `json:"id"`
+	Domain     string          `json:"domain"`
+	Type       string          `json:"type"`
+	Address    string          `json:"address"`
+	CertPath   string          `json:"cert_path"`
+	KeyPath    string          `json:"key_path"`
+	Enabled    bool            `json:"enabled"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
 }
 
 type DeploymentJob struct {

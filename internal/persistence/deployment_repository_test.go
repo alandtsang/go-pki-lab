@@ -20,6 +20,7 @@ func TestDeploymentRepositoriesRoundTrip(t *testing.T) {
 	}
 	now := time.Now().UTC().Truncate(time.Second)
 	target := platform.DeploymentTarget{ID: "target-1", Domain: "hello.test", Type: platform.DeploymentTargetTypeLocalHTTPS, Address: "127.0.0.1:8443", CertPath: "deploy/fullchain.pem", KeyPath: "deploy/key.pem", Enabled: true, CreatedAt: now, UpdatedAt: now}
+	target.Monitoring = platform.MonitoringState{Status: platform.MonitoringSerialMismatch, ExpectedSerial: "ABCD", OnlineSerial: "1234", CheckedAt: now, NotAfter: now.Add(time.Hour)}
 	if err := targetRepo.Save(target); err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +36,7 @@ func TestDeploymentRepositoriesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(targets) != 1 || targets[0].ID != target.ID || targets[0].CertPath != target.CertPath {
+	if len(targets) != 1 || targets[0].ID != target.ID || targets[0].CertPath != target.CertPath || targets[0].Monitoring != target.Monitoring {
 		t.Fatalf("unexpected deployment targets: %#v", targets)
 	}
 	if len(jobs) != 1 || jobs[0].ID != job.ID || jobs[0].CertificateSerial != job.CertificateSerial {
