@@ -50,6 +50,10 @@ type Service struct {
 	deploymentTargetRepository DeploymentTargetRepository
 	deploymentJobs             map[string]DeploymentJob
 	deploymentJobRepository    DeploymentJobRepository
+	events                     map[string]Event
+	eventRepository            EventRepository
+	alerts                     map[string]Alert
+	alertRepository            AlertRepository
 }
 
 func NewService(root, intermediate *ca.Authority, dnsServer string, repositories ...Repository) (*Service, error) {
@@ -71,6 +75,8 @@ func NewService(root, intermediate *ca.Authority, dnsServer string, repositories
 		renewalJobs:       make(map[string]RenewalJob),
 		deploymentTargets: make(map[string]DeploymentTarget),
 		deploymentJobs:    make(map[string]DeploymentJob),
+		events:            make(map[string]Event),
+		alerts:            make(map[string]Alert),
 	}
 	if len(repositories) > 0 && repositories[0] != nil {
 		s.repository = repositories[0]
