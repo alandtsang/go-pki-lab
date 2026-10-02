@@ -13,15 +13,31 @@ change job completion state, or alter Phase 9.5 TLS hot reload behavior.
 
 ```sh
 go run ./cmd/api-server -data-dir ./data \
-  -monitor-interval 1m -monitor-timeout 5s -monitor-expiring-before 720h
+  -monitor-interval 1m \
+  -monitor-timeout 5s \
+  -monitor-expiring-before-days 30
 ```
 
+`-monitor-expiring-before-days` is the preferred expiry-warning setting. It uses
+an integer number of days, so `30` means 30 days. Zero disables advance expiry
+warnings.
+
+The older duration flag is still accepted for compatibility:
+
+```sh
+-monitor-expiring-before 720h
+```
+
+Go's `time.Duration` parser does not support a `d` suffix, so values such as
+`30d` are invalid. If the legacy duration flag is explicitly set to a positive
+value, it overrides `-monitor-expiring-before-days`.
+
 A non-positive interval disables background scans; manual probes remain available.
-Timeout must be positive; the expiry window must be non-negative (zero disables
-advance warnings). Scans run sequentially without overlapping within the background
-worker. Each target has a bounded connection/handshake timeout. Shutdown cancels
-pending background probes. Disabled targets are skipped and retain their previous
-observation. A failed probe does not prevent probing subsequent targets.
+Timeout must be positive; the expiry window must be non-negative. Scans run
+sequentially without overlapping within the background worker. Each target has a
+bounded connection/handshake timeout. Shutdown cancels pending background probes.
+Disabled targets are skipped and retain their previous observation. A failed probe
+does not prevent probing subsequent targets.
 
 ## APIs
 
