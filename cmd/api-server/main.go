@@ -28,12 +28,18 @@ func main() {
 	deploymentScanInterval := flag.Duration("deployment-scan-interval", 15*time.Second, "deployment reconciler scan interval")
 	monitorInterval := flag.Duration("monitor-interval", time.Minute, "certificate monitoring interval; non-positive disables")
 	monitorTimeout := flag.Duration("monitor-timeout", 5*time.Second, "per-target TLS probe timeout")
-	monitorExpiry := flag.Duration("monitor-expiring-before", 30*24*time.Hour, "certificate expiry warning window")
+	monitorExpiryDays := flag.Int("monitor-expiring-before-days", 30, "certificate expiry warning window in days")
+	monitorExpiryLegacy := flag.Duration("monitor-expiring-before", 0, "deprecated: certificate expiry warning window as Go duration (for example 720h)")
 	flag.Parse()
-	monitorOptions := platform.MonitoringOptions{Timeout: *monitorTimeout, ExpiringBefore: *monitorExpiry}
-	if *monitorTimeout <= 0 || *monitorExpiry < 0 {
+
+	if *monitorTimeout <= 0 || *monitorExpiryDays < 0 || *monitorExpiryLegacy < 0 {
 		log.Fatal("invalid monitoring options")
 	}
+	monitorExpiry := time.Duration(*monitorExpiryDays) * 24 * time.Hour
+	if *monitorExpiryLegacy > 0 {
+		monitorExpiry = *monitorExpiryLegacy
+	}
+	monitorOptions := platform.MonitoringOptions{Timeout: *monitorTimeout, ExpiringBefore: monitorExpiry}
 
 	root, intermediate, created, err := loadOrCreateCA(filepath.Join(*dataDir, "ca"))
 	if err != nil {
@@ -167,6 +173,8 @@ func main() {
 		fmt.Printf("Deployment jobs: %s\n", filepath.Join(*dataDir, "deployment-jobs"))
 		fmt.Printf("Renewal scan interval: %s\n", renewalScanInterval.String())
 		fmt.Printf("Deployment scan interval: %s\n", deploymentScanInterval.String())
+		fmt.Printf("Monitoring interval: %s\n", monitorInterval.String())
+		fmt.Printf("Monitoring expiry warning: %s\n", monitorExpiry)
 		if created {
 			fmt.Printf("CA state: initialized new persistent CA\n")
 		} else {
