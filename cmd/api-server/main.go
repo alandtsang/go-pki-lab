@@ -89,6 +89,21 @@ func main() {
 	if err := service.SetDeploymentJobRepository(deploymentJobRepository); err != nil {
 		log.Fatal(err)
 	}
+	eventRepository, err := persistence.NewEventRepository(filepath.Join(*dataDir, "events"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := service.SetEventRepository(eventRepository); err != nil {
+		log.Fatal(err)
+	}
+	alertRepository, err := persistence.NewAlertRepository(filepath.Join(*dataDir, "alerts"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := service.SetAlertRepository(alertRepository); err != nil {
+		log.Fatal(err)
+	}
+
 	apiServer, err := api.NewServer(service, store, root.CertPEM)
 	if err != nil {
 		log.Fatal(err)
@@ -102,6 +117,10 @@ func main() {
 		log.Fatal(err)
 	}
 	deploymentAPI, err := api.NewDeploymentAPIWithMonitoring(service, monitorOptions)
+	if err != nil {
+		log.Fatal(err)
+	}
+	incidentAPI, err := api.NewIncidentAPI(service)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -151,6 +170,9 @@ func main() {
 	mux.Handle("POST /deployment-jobs/{id}/claim", deploymentAPI.Handler())
 	mux.Handle("POST /deployment-jobs/{id}/complete", deploymentAPI.Handler())
 	mux.Handle("POST /deployment-jobs/{id}/fail", deploymentAPI.Handler())
+	mux.Handle("GET /events", incidentAPI.Handler())
+	mux.Handle("GET /alerts", incidentAPI.Handler())
+	mux.Handle("GET /alerts/{id}", incidentAPI.Handler())
 	mux.Handle("/", apiServer.Handler())
 
 	httpServer := &http.Server{
@@ -171,6 +193,8 @@ func main() {
 		fmt.Printf("Renewal jobs: %s\n", filepath.Join(*dataDir, "renewal-jobs"))
 		fmt.Printf("Deployment targets: %s\n", filepath.Join(*dataDir, "deployment-targets"))
 		fmt.Printf("Deployment jobs: %s\n", filepath.Join(*dataDir, "deployment-jobs"))
+		fmt.Printf("Events: %s\n", filepath.Join(*dataDir, "events"))
+		fmt.Printf("Alerts: %s\n", filepath.Join(*dataDir, "alerts"))
 		fmt.Printf("Renewal scan interval: %s\n", renewalScanInterval.String())
 		fmt.Printf("Deployment scan interval: %s\n", deploymentScanInterval.String())
 		fmt.Printf("Monitoring interval: %s\n", monitorInterval.String())
