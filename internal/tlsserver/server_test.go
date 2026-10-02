@@ -1,6 +1,7 @@
 package tlsserver
 
 import (
+	"crypto/tls"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -58,5 +59,61 @@ func TestHandler(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "Go PKI Lab HTTPS is working") {
 		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestTLSConfigReloadsCertificateOnNewHandshake(t *testing.T) {
+	root, err := ca.NewRoot("Reload Root", 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intermediate, err := ca.NewIntermediate(root, "Reload Intermediate", 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := ca.IssueServerCertificate(intermediate, "hello.test", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := ca.IssueServerCertificate(intermediate, "hello.test", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "fullchain.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	write := func(cert, key []byte) {
+		t.Helper()
+		if err := os.WriteFile(certPath, cert, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(keyPath, key, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(first.FullChainPEM, first.KeyPEM)
+	cfg, err := NewTLSConfig(certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(NewHandler("hello.test"))
+	server.TLS = cfg
+	server.StartTLS()
+	defer server.Close()
+	probe := func() string {
+		t.Helper()
+		conn, err := tls.Dial("tcp", server.Listener.Addr().String(), &tls.Config{InsecureSkipVerify: true, ServerName: "hello.test"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		return conn.ConnectionState().PeerCertificates[0].SerialNumber.Text(16)
+	}
+	if got := probe(); got != first.Certificate.SerialNumber.Text(16) {
+		t.Fatal("initial serial mismatch")
+	}
+	write(second.FullChainPEM, second.KeyPEM)
+	if got := probe(); got != second.Certificate.SerialNumber.Text(16) {
+		t.Fatal("new handshake did not reload certificate")
 	}
 }

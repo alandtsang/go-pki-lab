@@ -4,20 +4,32 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/alandtsang/go-pki-lab/internal/platform"
 )
 
 type DeploymentAPI struct {
-	service *platform.Service
-	mux     *http.ServeMux
+	service           *platform.Service
+	mux               *http.ServeMux
+	monitoringOptions platform.MonitoringOptions
 }
 
 func NewDeploymentAPI(service *platform.Service) (*DeploymentAPI, error) {
+	return NewDeploymentAPIWithMonitoring(service, platform.MonitoringOptions{Timeout: 5 * time.Second, ExpiringBefore: 30 * 24 * time.Hour})
+}
+
+func NewDeploymentAPIWithMonitoring(service *platform.Service, options platform.MonitoringOptions) (*DeploymentAPI, error) {
+	if options.Timeout <= 0 || options.ExpiringBefore < 0 {
+		return nil, fmt.Errorf("invalid monitoring options")
+	}
 	if service == nil {
 		return nil, fmt.Errorf("platform service is required")
 	}
-	api := &DeploymentAPI{service: service, mux: http.NewServeMux()}
+	api := &DeploymentAPI{service: service, mux: http.NewServeMux(), monitoringOptions: options}
+	api.mux.HandleFunc("GET /deployment-targets/{id}/monitoring", api.handleGetMonitoring)
+	api.mux.HandleFunc("POST /deployment-targets/{id}/probe", api.handleProbe)
+	api.mux.HandleFunc("POST /certificate-monitor/run", api.handleMonitoringScan)
 	api.mux.HandleFunc("POST /deployment-targets", api.handleCreateTarget)
 	api.mux.HandleFunc("GET /deployment-targets", api.handleListTargets)
 	api.mux.HandleFunc("GET /deployment-targets/{id}", api.handleGetTarget)
@@ -164,4 +176,38 @@ func (a *DeploymentAPI) handleFailJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
+}
+
+func (a *DeploymentAPI) handleGetMonitoring(w http.ResponseWriter, r *http.Request) {
+	target, err := a.service.GetDeploymentTarget(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, target.Monitoring)
+}
+func (a *DeploymentAPI) handleProbe(w http.ResponseWriter, r *http.Request) {
+	target, err := a.service.GetDeploymentTarget(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if !target.Enabled {
+		writeError(w, http.StatusConflict, fmt.Errorf("target is disabled"))
+		return
+	}
+	state, err := a.service.ProbeDeploymentTarget(r.Context(), target.ID, a.monitoringOptions)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+func (a *DeploymentAPI) handleMonitoringScan(w http.ResponseWriter, r *http.Request) {
+	result, err := a.service.RunMonitoringScan(r.Context(), a.monitoringOptions)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }

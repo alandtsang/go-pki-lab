@@ -542,3 +542,9 @@ go run ./cmd/pki-server -domain hello.test -out ./out
 ```
 
 This creates an isolated CA and certificate chain under `out/`; it does not use the persistent CA under `data/ca/`.
+
+### Phase 9.6: Certificate monitoring
+
+Enabled deployment targets are periodically probed for online certificate identity,
+hostname, expiry, and drift from the platform Current Certificate. Latest observations
+persist with each target. See [monitoring configuration, APIs, and status rules](docs/phase9-certificate-monitoring.md).
