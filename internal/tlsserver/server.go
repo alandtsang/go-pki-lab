@@ -33,20 +33,32 @@ func loadKeyPair(certFile, keyFile string) (*tls.Certificate, error) {
 	return &pair, nil
 }
 
-// NewTLSConfig validates the current certificate pair and then reloads it from
-// disk for every new TLS handshake. Deployment can therefore atomically replace
-// the files without executing an arbitrary reload command or restarting the
-// HTTPS process.
+// NewTLSConfig loads the current certificate pair into Certificates so callers
+// can inspect and validate the initial TLS configuration. For each subsequent
+// ClientHello it reloads the files from disk and returns a per-connection config,
+// allowing deployment to atomically replace cert/key files without restarting
+// the HTTPS process.
 func NewTLSConfig(certFile, keyFile string) (*tls.Config, error) {
-	if _, err := loadKeyPair(certFile, keyFile); err != nil {
+	initialPair, err := loadKeyPair(certFile, keyFile)
+	if err != nil {
 		return nil, err
 	}
-	return &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return loadKeyPair(certFile, keyFile)
-		},
-	}, nil
+
+	config := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{*initialPair},
+	}
+	config.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+		pair, err := loadKeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, err
+		}
+		return &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{*pair},
+		}, nil
+	}
+	return config, nil
 }
 
 // NewHandler returns a small diagnostic HTTPS application used by the lab.
