@@ -25,6 +25,7 @@ func main() {
 	dnsAddr := flag.String("dns", "127.0.0.1:1053", "local DNS listen address")
 	dataDir := flag.String("data-dir", "./data", "persistent data directory")
 	renewalScanInterval := flag.Duration("renewal-scan-interval", time.Minute, "renewal scheduler scan interval")
+	deploymentScanInterval := flag.Duration("deployment-scan-interval", 15*time.Second, "deployment reconciler scan interval")
 	flag.Parse()
 
 	root, intermediate, created, err := loadOrCreateCA(filepath.Join(*dataDir, "ca"))
@@ -61,6 +62,20 @@ func main() {
 	if err := service.SetRenewalJobRepository(renewalJobRepository); err != nil {
 		log.Fatal(err)
 	}
+	deploymentTargetRepository, err := persistence.NewDeploymentTargetRepository(filepath.Join(*dataDir, "deployment-targets"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := service.SetDeploymentTargetRepository(deploymentTargetRepository); err != nil {
+		log.Fatal(err)
+	}
+	deploymentJobRepository, err := persistence.NewDeploymentJobRepository(filepath.Join(*dataDir, "deployment-jobs"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := service.SetDeploymentJobRepository(deploymentJobRepository); err != nil {
+		log.Fatal(err)
+	}
 	apiServer, err := api.NewServer(service, store, root.CertPEM)
 	if err != nil {
 		log.Fatal(err)
@@ -70,6 +85,10 @@ func main() {
 		log.Fatal(err)
 	}
 	renewalJobAPI, err := api.NewRenewalJobAPI(service)
+	if err != nil {
+		log.Fatal(err)
+	}
+	deploymentAPI, err := api.NewDeploymentAPI(service)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -106,6 +125,16 @@ func main() {
 	mux.Handle("POST /renewal-jobs/{id}/claim", renewalJobAPI.Handler())
 	mux.Handle("POST /renewal-jobs/{id}/complete", renewalJobAPI.Handler())
 	mux.Handle("POST /renewal-jobs/{id}/fail", renewalJobAPI.Handler())
+	mux.Handle("POST /deployment-targets", deploymentAPI.Handler())
+	mux.Handle("GET /deployment-targets", deploymentAPI.Handler())
+	mux.Handle("GET /deployment-targets/{id}", deploymentAPI.Handler())
+	mux.Handle("POST /deployment-targets/{id}/deploy", deploymentAPI.Handler())
+	mux.Handle("POST /deployment-reconciler/run", deploymentAPI.Handler())
+	mux.Handle("GET /deployment-jobs", deploymentAPI.Handler())
+	mux.Handle("GET /deployment-jobs/{id}", deploymentAPI.Handler())
+	mux.Handle("POST /deployment-jobs/{id}/claim", deploymentAPI.Handler())
+	mux.Handle("POST /deployment-jobs/{id}/complete", deploymentAPI.Handler())
+	mux.Handle("POST /deployment-jobs/{id}/fail", deploymentAPI.Handler())
 	mux.Handle("/", apiServer.Handler())
 
 	httpServer := &http.Server{
@@ -124,7 +153,10 @@ func main() {
 		fmt.Printf("ACME state: %s\n", filepath.Join(*dataDir, "acme", "state.json"))
 		fmt.Printf("Renewal policies: %s\n", filepath.Join(*dataDir, "renewal-policies"))
 		fmt.Printf("Renewal jobs: %s\n", filepath.Join(*dataDir, "renewal-jobs"))
+		fmt.Printf("Deployment targets: %s\n", filepath.Join(*dataDir, "deployment-targets"))
+		fmt.Printf("Deployment jobs: %s\n", filepath.Join(*dataDir, "deployment-jobs"))
 		fmt.Printf("Renewal scan interval: %s\n", renewalScanInterval.String())
+		fmt.Printf("Deployment scan interval: %s\n", deploymentScanInterval.String())
 		if created {
 			fmt.Printf("CA state: initialized new persistent CA\n")
 		} else {
@@ -136,6 +168,7 @@ func main() {
 	}()
 
 	go runRenewalScheduler(service, *renewalScanInterval)
+	go runDeploymentReconciler(service, *deploymentScanInterval)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -160,6 +193,28 @@ func runRenewalScheduler(service *platform.Service, interval time.Duration) {
 		}
 		if len(result.CreatedJobs) > 0 {
 			log.Printf("renewal scheduler created %d job(s)", len(result.CreatedJobs))
+		}
+	}
+	run()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		run()
+	}
+}
+
+func runDeploymentReconciler(service *platform.Service, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	run := func() {
+		result, err := service.RunDeploymentReconcile()
+		if err != nil {
+			log.Printf("deployment reconciler: %v", err)
+			return
+		}
+		if len(result.CreatedJobs) > 0 {
+			log.Printf("deployment reconciler created %d job(s)", len(result.CreatedJobs))
 		}
 	}
 	run()
