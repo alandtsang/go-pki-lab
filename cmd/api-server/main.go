@@ -24,7 +24,7 @@ func main() {
 	httpAddr := flag.String("http", "127.0.0.1:8080", "HTTP API listen address")
 	dnsAddr := flag.String("dns", "127.0.0.1:1053", "local DNS listen address")
 	dataDir := flag.String("data-dir", "./data", "persistent data directory")
-	renewalScanInterval := flag.Duration("renewal-scan-interval", time.Minute, "automatic renewal policy scan interval; <=0 disables background scans")
+	renewalScanInterval := flag.Duration("renewal-scan-interval", time.Minute, "renewal scheduler scan interval")
 	flag.Parse()
 
 	root, intermediate, created, err := loadOrCreateCA(filepath.Join(*dataDir, "ca"))
@@ -103,18 +103,15 @@ func main() {
 	mux.Handle("POST /renewal-scheduler/run", renewalJobAPI.Handler())
 	mux.Handle("GET /renewal-jobs", renewalJobAPI.Handler())
 	mux.Handle("GET /renewal-jobs/{id}", renewalJobAPI.Handler())
+	mux.Handle("POST /renewal-jobs/{id}/claim", renewalJobAPI.Handler())
+	mux.Handle("POST /renewal-jobs/{id}/complete", renewalJobAPI.Handler())
+	mux.Handle("POST /renewal-jobs/{id}/fail", renewalJobAPI.Handler())
 	mux.Handle("/", apiServer.Handler())
 
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
-	}
-
-	schedulerCtx, schedulerCancel := context.WithCancel(context.Background())
-	defer schedulerCancel()
-	if *renewalScanInterval > 0 {
-		go runRenewalScheduler(schedulerCtx, service, *renewalScanInterval)
 	}
 
 	go func() {
@@ -127,11 +124,7 @@ func main() {
 		fmt.Printf("ACME state: %s\n", filepath.Join(*dataDir, "acme", "state.json"))
 		fmt.Printf("Renewal policies: %s\n", filepath.Join(*dataDir, "renewal-policies"))
 		fmt.Printf("Renewal jobs: %s\n", filepath.Join(*dataDir, "renewal-jobs"))
-		if *renewalScanInterval > 0 {
-			fmt.Printf("Renewal scan interval: %s\n", renewalScanInterval.String())
-		} else {
-			fmt.Printf("Renewal scheduler: disabled\n")
-		}
+		fmt.Printf("Renewal scan interval: %s\n", renewalScanInterval.String())
 		if created {
 			fmt.Printf("CA state: initialized new persistent CA\n")
 		} else {
@@ -142,10 +135,11 @@ func main() {
 		}
 	}()
 
+	go runRenewalScheduler(service, *renewalScanInterval)
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
-	schedulerCancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -154,28 +148,25 @@ func main() {
 	}
 }
 
-func runRenewalScheduler(ctx context.Context, service *platform.Service, interval time.Duration) {
+func runRenewalScheduler(service *platform.Service, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
 	run := func() {
 		result, err := service.RunRenewalScan()
 		if err != nil {
-			log.Printf("renewal scheduler scan: %v", err)
+			log.Printf("renewal scheduler: %v", err)
 			return
 		}
 		if len(result.CreatedJobs) > 0 {
 			log.Printf("renewal scheduler created %d job(s)", len(result.CreatedJobs))
 		}
 	}
-
 	run()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			run()
-		}
+	for range ticker.C {
+		run()
 	}
 }
 
