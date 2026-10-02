@@ -35,17 +35,21 @@ type Repository interface {
 }
 
 type Service struct {
-	mu                      sync.RWMutex
-	orders                  map[string]*Entry
-	root                    *ca.Authority
-	intermediate            *ca.Authority
-	dnsServer               string
-	repository              Repository
-	certificateSources      []CertificateStateSource
-	renewalPolicies         map[string]RenewalPolicy
-	renewalPolicyRepository RenewalPolicyRepository
-	renewalJobs             map[string]RenewalJob
-	renewalJobRepository    RenewalJobRepository
+	mu                         sync.RWMutex
+	orders                     map[string]*Entry
+	root                       *ca.Authority
+	intermediate               *ca.Authority
+	dnsServer                  string
+	repository                 Repository
+	certificateSources         []CertificateStateSource
+	renewalPolicies            map[string]RenewalPolicy
+	renewalPolicyRepository    RenewalPolicyRepository
+	renewalJobs                map[string]RenewalJob
+	renewalJobRepository       RenewalJobRepository
+	deploymentTargets          map[string]DeploymentTarget
+	deploymentTargetRepository DeploymentTargetRepository
+	deploymentJobs             map[string]DeploymentJob
+	deploymentJobRepository    DeploymentJobRepository
 }
 
 func NewService(root, intermediate *ca.Authority, dnsServer string, repositories ...Repository) (*Service, error) {
@@ -59,12 +63,14 @@ func NewService(root, intermediate *ca.Authority, dnsServer string, repositories
 		return nil, fmt.Errorf("DNS server address is required")
 	}
 	s := &Service{
-		orders:          make(map[string]*Entry),
-		root:            root,
-		intermediate:    intermediate,
-		dnsServer:       dnsServer,
-		renewalPolicies: make(map[string]RenewalPolicy),
-		renewalJobs:     make(map[string]RenewalJob),
+		orders:            make(map[string]*Entry),
+		root:              root,
+		intermediate:      intermediate,
+		dnsServer:         dnsServer,
+		renewalPolicies:   make(map[string]RenewalPolicy),
+		renewalJobs:       make(map[string]RenewalJob),
+		deploymentTargets: make(map[string]DeploymentTarget),
+		deploymentJobs:    make(map[string]DeploymentJob),
 	}
 	if len(repositories) > 0 && repositories[0] != nil {
 		s.repository = repositories[0]
