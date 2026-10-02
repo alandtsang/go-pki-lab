@@ -23,16 +23,16 @@ type Event struct {
 }
 
 type Alert struct {
-	ID           string     `json:"id"`
-	TargetID     string     `json:"target_id"`
-	Domain       string     `json:"domain"`
-	Type         string     `json:"type"`
-	Status       string     `json:"status"`
-	FirstSeenAt  time.Time  `json:"first_seen_at"`
-	LastSeenAt   time.Time  `json:"last_seen_at"`
-	ResolvedAt   *time.Time `json:"resolved_at,omitempty"`
-	Occurrences  int        `json:"occurrences"`
-	LastMessage  string     `json:"last_message,omitempty"`
+	ID          string     `json:"id"`
+	TargetID    string     `json:"target_id"`
+	Domain      string     `json:"domain"`
+	Type        string     `json:"type"`
+	Status      string     `json:"status"`
+	FirstSeenAt time.Time  `json:"first_seen_at"`
+	LastSeenAt  time.Time  `json:"last_seen_at"`
+	ResolvedAt  *time.Time `json:"resolved_at,omitempty"`
+	Occurrences int        `json:"occurrences"`
+	LastMessage string     `json:"last_message,omitempty"`
 }
 
 type EventRepository interface {
@@ -163,17 +163,28 @@ func monitoringTransitionMessage(target DeploymentTarget, previous, current Moni
 }
 
 func (s *Service) RecordMonitoringTransition(target DeploymentTarget, previous, current MonitoringState) error {
-	if current.Status == "" || previous.Status == current.Status {
+	if current.Status == "" || s.eventRepository == nil || s.alertRepository == nil {
 		return nil
 	}
-	if s.eventRepository == nil || s.alertRepository == nil {
-		return nil
-	}
-
 	now := current.CheckedAt
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+
+	if previous.Status == current.Status {
+		if !isAbnormalMonitoringStatus(current.Status) {
+			return nil
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, alert := range s.alerts {
+			if alert.TargetID == target.ID && alert.Type == current.Status && alert.Status == AlertStatusFiring {
+				return nil
+			}
+		}
+		return s.createFiringAlertLocked(target, current.Status, now, "alert bootstrapped from persisted monitoring state")
+	}
+
 	eventID, err := randomID()
 	if err != nil {
 		return err
@@ -220,6 +231,10 @@ func (s *Service) RecordMonitoringTransition(target DeploymentTarget, previous, 
 			return nil
 		}
 	}
+	return s.createFiringAlertLocked(target, current.Status, now, event.Message)
+}
+
+func (s *Service) createFiringAlertLocked(target DeploymentTarget, alertType string, now time.Time, message string) error {
 	alertID, err := randomID()
 	if err != nil {
 		return err
@@ -228,12 +243,12 @@ func (s *Service) RecordMonitoringTransition(target DeploymentTarget, previous, 
 		ID:          alertID,
 		TargetID:    target.ID,
 		Domain:      target.Domain,
-		Type:        current.Status,
+		Type:        alertType,
 		Status:      AlertStatusFiring,
 		FirstSeenAt: now,
 		LastSeenAt:  now,
 		Occurrences: 1,
-		LastMessage: event.Message,
+		LastMessage: message,
 	}
 	if err := s.alertRepository.Save(alert); err != nil {
 		return err
