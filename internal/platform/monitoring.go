@@ -59,13 +59,14 @@ func (s *Service) ProbeDeploymentTarget(ctx context.Context, id string, options 
 	probeCtx, cancel := context.WithTimeout(ctx, options.Timeout)
 	defer cancel()
 	dialer := tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{
-		MinVersion: tls.VersionTLS12, ServerName: target.Domain,
+		MinVersion:         tls.VersionTLS12,
+		ServerName:         target.Domain,
 		InsecureSkipVerify: true, // Observation only; hostname and expiry checked below.
 	}}
 	conn, probeErr := dialer.DialContext(probeCtx, "tcp", target.Address)
 	if ctx.Err() != nil {
 		if conn != nil {
-			conn.Close()
+			_ = conn.Close()
 		}
 		return MonitoringState{}, ctx.Err()
 	}
@@ -114,21 +115,30 @@ func (s *Service) ProbeDeploymentTarget(ctx context.Context, id string, options 
 			}
 		}
 	}
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	target = s.deploymentTargets[id]
+	previous := target.Monitoring
 	// Concurrent probes cannot overwrite a newer observation.
-	if target.Monitoring.CheckedAt.After(state.CheckedAt) {
-		return target.Monitoring, nil
+	if previous.CheckedAt.After(state.CheckedAt) {
+		s.mu.Unlock()
+		return previous, nil
 	}
 	if s.deploymentTargetRepository == nil {
+		s.mu.Unlock()
 		return MonitoringState{}, fmt.Errorf("deployment target repository is not configured")
 	}
 	target.Monitoring = state
 	if err := s.deploymentTargetRepository.Save(target); err != nil {
+		s.mu.Unlock()
 		return MonitoringState{}, err
 	}
 	s.deploymentTargets[id] = target
+	s.mu.Unlock()
+
+	if err := s.RecordMonitoringTransition(target, previous, state); err != nil {
+		return state, fmt.Errorf("record monitoring transition: %w", err)
+	}
 	return state, nil
 }
 
