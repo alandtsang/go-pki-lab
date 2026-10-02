@@ -24,6 +24,7 @@ func main() {
 	httpAddr := flag.String("http", "127.0.0.1:8080", "HTTP API listen address")
 	dnsAddr := flag.String("dns", "127.0.0.1:1053", "local DNS listen address")
 	dataDir := flag.String("data-dir", "./data", "persistent data directory")
+	renewalScanInterval := flag.Duration("renewal-scan-interval", time.Minute, "automatic renewal policy scan interval; <=0 disables background scans")
 	flag.Parse()
 
 	root, intermediate, created, err := loadOrCreateCA(filepath.Join(*dataDir, "ca"))
@@ -53,11 +54,22 @@ func main() {
 	if err := service.SetRenewalPolicyRepository(renewalPolicyRepository); err != nil {
 		log.Fatal(err)
 	}
+	renewalJobRepository, err := persistence.NewRenewalJobRepository(filepath.Join(*dataDir, "renewal-jobs"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := service.SetRenewalJobRepository(renewalJobRepository); err != nil {
+		log.Fatal(err)
+	}
 	apiServer, err := api.NewServer(service, store, root.CertPEM)
 	if err != nil {
 		log.Fatal(err)
 	}
 	renewalPolicyAPI, err := api.NewRenewalPolicyAPI(service)
+	if err != nil {
+		log.Fatal(err)
+	}
+	renewalJobAPI, err := api.NewRenewalJobAPI(service)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -88,12 +100,21 @@ func main() {
 	mux.Handle("GET /domains/{domain}/renewal-policy", renewalPolicyAPI.Handler())
 	mux.Handle("PUT /domains/{domain}/renewal-policy", renewalPolicyAPI.Handler())
 	mux.Handle("GET /domains/{domain}/renewal-decision", renewalPolicyAPI.Handler())
+	mux.Handle("POST /renewal-scheduler/run", renewalJobAPI.Handler())
+	mux.Handle("GET /renewal-jobs", renewalJobAPI.Handler())
+	mux.Handle("GET /renewal-jobs/{id}", renewalJobAPI.Handler())
 	mux.Handle("/", apiServer.Handler())
 
 	httpServer := &http.Server{
 		Addr:              *httpAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	schedulerCtx, schedulerCancel := context.WithCancel(context.Background())
+	defer schedulerCancel()
+	if *renewalScanInterval > 0 {
+		go runRenewalScheduler(schedulerCtx, service, *renewalScanInterval)
 	}
 
 	go func() {
@@ -105,6 +126,12 @@ func main() {
 		fmt.Printf("Persistent data: %s\n", *dataDir)
 		fmt.Printf("ACME state: %s\n", filepath.Join(*dataDir, "acme", "state.json"))
 		fmt.Printf("Renewal policies: %s\n", filepath.Join(*dataDir, "renewal-policies"))
+		fmt.Printf("Renewal jobs: %s\n", filepath.Join(*dataDir, "renewal-jobs"))
+		if *renewalScanInterval > 0 {
+			fmt.Printf("Renewal scan interval: %s\n", renewalScanInterval.String())
+		} else {
+			fmt.Printf("Renewal scheduler: disabled\n")
+		}
 		if created {
 			fmt.Printf("CA state: initialized new persistent CA\n")
 		} else {
@@ -118,11 +145,37 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
+	schedulerCancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := httpServer.Shutdown(ctx); err != nil {
 		log.Printf("HTTP shutdown: %v", err)
+	}
+}
+
+func runRenewalScheduler(ctx context.Context, service *platform.Service, interval time.Duration) {
+	run := func() {
+		result, err := service.RunRenewalScan()
+		if err != nil {
+			log.Printf("renewal scheduler scan: %v", err)
+			return
+		}
+		if len(result.CreatedJobs) > 0 {
+			log.Printf("renewal scheduler created %d job(s)", len(result.CreatedJobs))
+		}
+	}
+
+	run()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
+		}
 	}
 }
 
