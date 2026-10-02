@@ -172,17 +172,9 @@ func (s *Service) RecordMonitoringTransition(target DeploymentTarget, previous, 
 	}
 
 	if previous.Status == current.Status {
-		if !isAbnormalMonitoringStatus(current.Status) {
-			return nil
-		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		for _, alert := range s.alerts {
-			if alert.TargetID == target.ID && alert.Type == current.Status && alert.Status == AlertStatusFiring {
-				return nil
-			}
-		}
-		return s.createFiringAlertLocked(target, current.Status, now, "alert bootstrapped from persisted monitoring state")
+		return s.reconcileAlertsLocked(target, current.Status, now)
 	}
 
 	eventID, err := randomID()
@@ -207,31 +199,62 @@ func (s *Service) RecordMonitoringTransition(target DeploymentTarget, previous, 
 	s.events[event.ID] = event
 
 	if isAbnormalMonitoringStatus(previous.Status) {
-		for id, alert := range s.alerts {
-			if alert.TargetID != target.ID || alert.Type != previous.Status || alert.Status != AlertStatusFiring {
-				continue
-			}
-			resolvedAt := now
-			alert.Status = AlertStatusResolved
-			alert.ResolvedAt = &resolvedAt
-			alert.LastSeenAt = now
-			alert.LastMessage = event.Message
-			if err := s.alertRepository.Save(alert); err != nil {
-				return err
-			}
-			s.alerts[id] = alert
+		if err := s.resolveFiringAlertsLocked(target.ID, previous.Status, now, event.Message); err != nil {
+			return err
 		}
 	}
-
 	if !isAbnormalMonitoringStatus(current.Status) {
-		return nil
+		return s.resolveFiringAlertsLocked(target.ID, "", now, event.Message)
 	}
+	return s.ensureFiringAlertLocked(target, current.Status, now, event.Message)
+}
+
+func (s *Service) reconcileAlertsLocked(target DeploymentTarget, currentStatus string, now time.Time) error {
+	if !isAbnormalMonitoringStatus(currentStatus) {
+		return s.resolveFiringAlertsLocked(target.ID, "", now, "monitoring is healthy")
+	}
+	if err := s.resolveFiringAlertsLocked(target.ID, "!"+currentStatus, now, "monitoring status changed while alert state was stale"); err != nil {
+		return err
+	}
+	return s.ensureFiringAlertLocked(target, currentStatus, now, "alert bootstrapped from persisted monitoring state")
+}
+
+// alertType matches one exact type. A leading ! resolves every firing alert except that type.
+// An empty alertType resolves every firing alert for the target.
+func (s *Service) resolveFiringAlertsLocked(targetID, alertType string, now time.Time, message string) error {
+	for id, alert := range s.alerts {
+		if alert.TargetID != targetID || alert.Status != AlertStatusFiring {
+			continue
+		}
+		if alertType != "" {
+			if strings.HasPrefix(alertType, "!") {
+				if alert.Type == strings.TrimPrefix(alertType, "!") {
+					continue
+				}
+			} else if alert.Type != alertType {
+				continue
+			}
+		}
+		resolvedAt := now
+		alert.Status = AlertStatusResolved
+		alert.ResolvedAt = &resolvedAt
+		alert.LastSeenAt = now
+		alert.LastMessage = message
+		if err := s.alertRepository.Save(alert); err != nil {
+			return err
+		}
+		s.alerts[id] = alert
+	}
+	return nil
+}
+
+func (s *Service) ensureFiringAlertLocked(target DeploymentTarget, alertType string, now time.Time, message string) error {
 	for _, alert := range s.alerts {
-		if alert.TargetID == target.ID && alert.Type == current.Status && alert.Status == AlertStatusFiring {
+		if alert.TargetID == target.ID && alert.Type == alertType && alert.Status == AlertStatusFiring {
 			return nil
 		}
 	}
-	return s.createFiringAlertLocked(target, current.Status, now, event.Message)
+	return s.createFiringAlertLocked(target, alertType, now, message)
 }
 
 func (s *Service) createFiringAlertLocked(target DeploymentTarget, alertType string, now time.Time, message string) error {
