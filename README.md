@@ -25,6 +25,7 @@ Phase 8  [done] ACME protocol
 Phase 9  [in progress] Certificate platform capabilities
          9.1 [done] Domain certificate instance + current certificate selection
          9.2 [done] Persistent renewal policy + renewal decision
+         9.3 [done] Renewal scheduler + persistent renewal jobs
 ```
 
 ## Architecture
@@ -67,6 +68,13 @@ Phase 9  [in progress] Certificate platform capabilities
                                            |
                                            v
                                     Renewal Decision
+                                           |
+                                           v
+                                  Renewal Scheduler
+                                           |
+                                           v
+                                      Renewal Job
+                                  waiting_for_client
 ```
 
 The leaf private key and ACME account private key stay on the client side.
@@ -89,15 +97,17 @@ go run ./cmd/api-server
 Defaults:
 
 ```text
-HTTP API        : http://127.0.0.1:8080
-ACME directory  : http://127.0.0.1:8080/acme/directory
-DNS             : 127.0.0.1:1053/udp
-Persistent data : ./data
-ACME state      : ./data/acme/state.json
-Renewal policies: ./data/renewal-policies/
+HTTP API          : http://127.0.0.1:8080
+ACME directory    : http://127.0.0.1:8080/acme/directory
+DNS               : 127.0.0.1:1053/udp
+Persistent data   : ./data
+ACME state        : ./data/acme/state.json
+Renewal policies  : ./data/renewal-policies/
+Renewal jobs      : ./data/renewal-jobs/
+Renewal scan      : 1m
 ```
 
-The first startup creates the Root and Intermediate CA. Later startups load the same CA, ACME protocol state, and renewal policies from disk.
+The first startup creates the Root and Intermediate CA. Later startups load the same CA, ACME protocol state, renewal policies, and renewal jobs from disk.
 
 ## Persistent server data
 
@@ -112,6 +122,8 @@ data/
 │   └── <platform-order-id>.json
 ├── renewal-policies/
 │   └── <domain-sha256>.json
+├── renewal-jobs/
+│   └── <job-id>.json
 └── acme/
     └── state.json
 ```
@@ -345,12 +357,49 @@ curl -s http://127.0.0.1:8080/domains/hello2.test/renewal-policy | jq
 curl -s http://127.0.0.1:8080/domains/hello2.test/renewal-decision | jq
 ```
 
-The decision is read-only in Phase 9.2. It does not yet create an ACME Order automatically.
-
 Details:
 
 ```text
 docs/phase9-renewal-policy.md
+```
+
+## Renewal scheduler
+
+Phase 9.3 turns renewal decisions into persistent jobs. The scheduler performs one scan at startup and then scans every minute by default.
+
+For a faster local test:
+
+```bash
+go run ./cmd/api-server -renewal-scan-interval 5s
+```
+
+Run a scan manually:
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/renewal-scheduler/run | jq
+```
+
+Query jobs:
+
+```bash
+curl -s http://127.0.0.1:8080/renewal-jobs | jq
+curl -s 'http://127.0.0.1:8080/renewal-jobs?domain=hello2.test' | jq
+```
+
+A due domain gets one persistent job with:
+
+```text
+status = waiting_for_client
+```
+
+Repeated scans do not create another open job for the same domain.
+
+The server intentionally does not finalize the renewed certificate itself yet because the leaf private key remains client-owned. The next phase adds the client-side renewal executor.
+
+Details:
+
+```text
+docs/phase9-renewal-scheduler.md
 ```
 
 ## Tests
@@ -385,6 +434,9 @@ P-256 account key
 -> current-certificate selection
 -> renewal policy persistence
 -> renewal-window decision
+-> renewal job creation
+-> scheduler duplicate prevention
+-> renewal job restart recovery
 ```
 
 ## Non-ACME certificate API
@@ -436,6 +488,9 @@ GET  /domains/{domain}/certificate-instance
 GET  /domains/{domain}/renewal-policy
 PUT  /domains/{domain}/renewal-policy
 GET  /domains/{domain}/renewal-decision
+POST /renewal-scheduler/run
+GET  /renewal-jobs
+GET  /renewal-jobs/{id}
 GET  /ca/crl
 POST /ocsp
 ```
@@ -470,8 +525,7 @@ Before revocation the status should be `good`; after revocation it should be `re
 - persisted ACME resource URLs assume the same externally visible ACME base URL after restart
 - no account key rollover
 - no External Account Binding
-- no automatic renewal scheduler yet
-- no renewal executor yet
+- renewal jobs currently wait for a client-side executor
 - no deployment target abstraction yet
 - renewal in the non-ACME API currently reuses the original CSR/public key
 - CRL number is not yet a persisted monotonic counter
