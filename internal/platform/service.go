@@ -44,6 +44,8 @@ type Service struct {
 	certificateSources      []CertificateStateSource
 	renewalPolicies         map[string]RenewalPolicy
 	renewalPolicyRepository RenewalPolicyRepository
+	renewalJobs             map[string]RenewalJob
+	renewalJobRepository    RenewalJobRepository
 }
 
 func NewService(root, intermediate *ca.Authority, dnsServer string, repositories ...Repository) (*Service, error) {
@@ -62,6 +64,7 @@ func NewService(root, intermediate *ca.Authority, dnsServer string, repositories
 		intermediate:    intermediate,
 		dnsServer:       dnsServer,
 		renewalPolicies: make(map[string]RenewalPolicy),
+		renewalJobs:     make(map[string]RenewalJob),
 	}
 	if len(repositories) > 0 && repositories[0] != nil {
 		s.repository = repositories[0]
