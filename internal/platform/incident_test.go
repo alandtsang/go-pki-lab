@@ -47,7 +47,8 @@ func (r *memoryAlertRepository) Save(alert Alert) error {
 	return nil
 }
 
-func TestMonitoringTransitionAlertLifecycle(t *testing.T) {
+func newIncidentTestService(t *testing.T) *Service {
+	t.Helper()
 	root, err := ca.NewRoot("Test Root", 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -60,15 +61,17 @@ func TestMonitoringTransitionAlertLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := &memoryEventRepository{events: make(map[string]Event)}
-	alerts := &memoryAlertRepository{alerts: make(map[string]Alert)}
-	if err := service.SetEventRepository(events); err != nil {
+	if err := service.SetEventRepository(&memoryEventRepository{events: make(map[string]Event)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.SetAlertRepository(alerts); err != nil {
+	if err := service.SetAlertRepository(&memoryAlertRepository{alerts: make(map[string]Alert)}); err != nil {
 		t.Fatal(err)
 	}
+	return service
+}
 
+func TestMonitoringTransitionAlertLifecycle(t *testing.T) {
+	service := newIncidentTestService(t)
 	target := DeploymentTarget{ID: "target-1", Domain: "hello.test"}
 	t0 := time.Now().UTC()
 	healthy := MonitoringState{Status: MonitoringHealthy, CheckedAt: t0}
@@ -114,5 +117,29 @@ func TestMonitoringTransitionAlertLifecycle(t *testing.T) {
 	}
 	if resolved[0].ResolvedAt == nil {
 		t.Fatal("expected resolved_at to be set")
+	}
+}
+
+func TestMonitoringSameAbnormalStateBootstrapsAlertWithoutEvent(t *testing.T) {
+	service := newIncidentTestService(t)
+	target := DeploymentTarget{ID: "target-2", Domain: "hello.test"}
+	state := MonitoringState{Status: MonitoringTLSUnreachable, CheckedAt: time.Now().UTC()}
+
+	if err := service.RecordMonitoringTransition(target, state, state); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(service.Events(target.ID)); got != 0 {
+		t.Fatalf("expected no synthetic event, got %d", got)
+	}
+	firing := service.Alerts(AlertStatusFiring, target.ID)
+	if len(firing) != 1 || firing[0].Type != MonitoringTLSUnreachable {
+		t.Fatalf("expected one bootstrapped tls_unreachable alert, got %#v", firing)
+	}
+
+	if err := service.RecordMonitoringTransition(target, state, state); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(service.Alerts(AlertStatusFiring, target.ID)); got != 1 {
+		t.Fatalf("expected alert deduplication, got %d", got)
 	}
 }
