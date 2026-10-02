@@ -17,8 +17,7 @@ type Config struct {
 	KeyFile  string
 }
 
-// NewTLSConfig loads a leaf/full-chain certificate and matching private key.
-func NewTLSConfig(certFile, keyFile string) (*tls.Config, error) {
+func loadKeyPair(certFile, keyFile string) (*tls.Certificate, error) {
 	certPEM, err := os.ReadFile(certFile)
 	if err != nil {
 		return nil, fmt.Errorf("read certificate file %s: %w", certFile, err)
@@ -27,15 +26,26 @@ func NewTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read private key file %s: %w", keyFile, err)
 	}
-
 	pair, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("load TLS certificate pair: %w", err)
 	}
+	return &pair, nil
+}
 
+// NewTLSConfig validates the current certificate pair and then reloads it from
+// disk for every new TLS handshake. Deployment can therefore atomically replace
+// the files without executing an arbitrary reload command or restarting the
+// HTTPS process.
+func NewTLSConfig(certFile, keyFile string) (*tls.Config, error) {
+	if _, err := loadKeyPair(certFile, keyFile); err != nil {
+		return nil, err
+	}
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		Certificates: []tls.Certificate{pair},
+		MinVersion: tls.VersionTLS12,
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return loadKeyPair(certFile, keyFile)
+		},
 	}, nil
 }
 
