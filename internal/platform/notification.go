@@ -16,9 +16,10 @@ const (
 	NotificationEventFiring   = "firing"
 	NotificationEventResolved = "resolved"
 
-	NotificationStatusPending   = "pending"
-	NotificationStatusDelivered = "delivered"
-	NotificationStatusFailed    = "failed"
+	NotificationStatusPending    = "pending"
+	NotificationStatusDelivering = "delivering"
+	NotificationStatusDelivered  = "delivered"
+	NotificationStatusFailed     = "failed"
 )
 
 type Notification struct {
@@ -38,6 +39,7 @@ type NotificationDelivery struct {
 	Domain      string     `json:"domain"`
 	AlertType   string     `json:"alert_type"`
 	Event       string     `json:"event"`
+	Message     string     `json:"message"`
 	Sink        string     `json:"sink"`
 	Status      string     `json:"status"`
 	Attempts    int        `json:"attempts"`
@@ -128,6 +130,10 @@ func (s *Service) SetNotificationDeliveryRepository(repository NotificationDeliv
 		if delivery.ID == "" || delivery.AlertID == "" || delivery.Sink == "" {
 			continue
 		}
+		if delivery.Status == NotificationStatusDelivering {
+			delivery.Status = NotificationStatusFailed
+			delivery.LastError = "delivery interrupted by process restart"
+		}
 		s.notificationDeliveries[delivery.ID] = delivery
 	}
 	return nil
@@ -210,6 +216,7 @@ func (s *Service) enqueueAlertNotificationsLocked(alert Alert, event string, now
 			Domain:    alert.Domain,
 			AlertType: alert.Type,
 			Event:     event,
+			Message:   alert.LastMessage,
 			Sink:      sinkName,
 			Status:    NotificationStatusPending,
 			CreatedAt: now,
@@ -224,75 +231,84 @@ func (s *Service) enqueueAlertNotificationsLocked(alert Alert, event string, now
 }
 
 func (s *Service) DispatchNotifications(ctx context.Context) error {
-	type workItem struct {
-		delivery NotificationDelivery
-		sink     AlertSink
-		alert    Alert
-	}
-
-	s.mu.RLock()
-	items := make([]workItem, 0)
-	for _, delivery := range s.notificationDeliveries {
-		if delivery.Status == NotificationStatusDelivered {
-			continue
-		}
-		sink, ok := s.alertSinks[delivery.Sink]
-		if !ok {
-			continue
-		}
-		alert, ok := s.alerts[delivery.AlertID]
-		if !ok {
-			continue
-		}
-		items = append(items, workItem{delivery: delivery, sink: sink, alert: alert})
-	}
-	s.mu.RUnlock()
-
-	for _, item := range items {
+	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		notification := Notification{
-			AlertID:   item.alert.ID,
-			TargetID:  item.alert.TargetID,
-			Domain:    item.alert.Domain,
-			AlertType: item.alert.Type,
-			Event:     item.delivery.Event,
-			Message:   item.alert.LastMessage,
-			CreatedAt: item.delivery.CreatedAt,
+
+		s.mu.Lock()
+		var delivery NotificationDelivery
+		var sink AlertSink
+		found := false
+		for id, candidate := range s.notificationDeliveries {
+			if candidate.Status == NotificationStatusDelivered || candidate.Status == NotificationStatusDelivering {
+				continue
+			}
+			candidateSink, ok := s.alertSinks[candidate.Sink]
+			if !ok {
+				continue
+			}
+			candidate.Status = NotificationStatusDelivering
+			candidate.Attempts++
+			candidate.UpdatedAt = time.Now().UTC()
+			if s.notificationDeliveryRepository == nil {
+				s.mu.Unlock()
+				return fmt.Errorf("notification delivery repository is not configured")
+			}
+			if err := s.notificationDeliveryRepository.Save(candidate); err != nil {
+				s.mu.Unlock()
+				return err
+			}
+			s.notificationDeliveries[id] = candidate
+			delivery = candidate
+			sink = candidateSink
+			found = true
+			break
 		}
-		deliveryErr := item.sink.Deliver(ctx, notification)
+		s.mu.Unlock()
+		if !found {
+			return nil
+		}
+
+		notification := Notification{
+			AlertID:   delivery.AlertID,
+			TargetID:  delivery.TargetID,
+			Domain:    delivery.Domain,
+			AlertType: delivery.AlertType,
+			Event:     delivery.Event,
+			Message:   delivery.Message,
+			CreatedAt: delivery.CreatedAt,
+		}
+		deliveryErr := sink.Deliver(ctx, notification)
 		now := time.Now().UTC()
 
 		s.mu.Lock()
-		delivery, ok := s.notificationDeliveries[item.delivery.ID]
-		if !ok || delivery.Status == NotificationStatusDelivered {
+		current, ok := s.notificationDeliveries[delivery.ID]
+		if !ok {
 			s.mu.Unlock()
 			continue
 		}
-		delivery.Attempts++
-		delivery.UpdatedAt = now
+		current.UpdatedAt = now
 		if deliveryErr != nil {
-			delivery.Status = NotificationStatusFailed
-			delivery.LastError = deliveryErr.Error()
+			current.Status = NotificationStatusFailed
+			current.LastError = deliveryErr.Error()
 		} else {
-			delivery.Status = NotificationStatusDelivered
-			delivery.LastError = ""
+			current.Status = NotificationStatusDelivered
+			current.LastError = ""
 			deliveredAt := now
-			delivery.DeliveredAt = &deliveredAt
+			current.DeliveredAt = &deliveredAt
 		}
-		if s.notificationDeliveryRepository == nil {
-			s.mu.Unlock()
-			return fmt.Errorf("notification delivery repository is not configured")
-		}
-		if err := s.notificationDeliveryRepository.Save(delivery); err != nil {
+		if err := s.notificationDeliveryRepository.Save(current); err != nil {
 			s.mu.Unlock()
 			return err
 		}
-		s.notificationDeliveries[delivery.ID] = delivery
+		s.notificationDeliveries[current.ID] = current
 		s.mu.Unlock()
+
+		if deliveryErr != nil {
+			return deliveryErr
+		}
 	}
-	return nil
 }
 
 func (s *Service) RunNotificationDispatcher(ctx context.Context, interval time.Duration, report func(error)) {
