@@ -231,6 +231,9 @@ func (s *Service) enqueueAlertNotificationsLocked(alert Alert, event string, now
 }
 
 func (s *Service) DispatchNotifications(ctx context.Context) error {
+	attempted := make(map[string]bool)
+	var firstErr error
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -241,7 +244,7 @@ func (s *Service) DispatchNotifications(ctx context.Context) error {
 		var sink AlertSink
 		found := false
 		for id, candidate := range s.notificationDeliveries {
-			if candidate.Status == NotificationStatusDelivered || candidate.Status == NotificationStatusDelivering {
+			if attempted[id] || candidate.Status == NotificationStatusDelivered || candidate.Status == NotificationStatusDelivering {
 				continue
 			}
 			candidateSink, ok := s.alertSinks[candidate.Sink]
@@ -260,6 +263,7 @@ func (s *Service) DispatchNotifications(ctx context.Context) error {
 				return err
 			}
 			s.notificationDeliveries[id] = candidate
+			attempted[id] = true
 			delivery = candidate
 			sink = candidateSink
 			found = true
@@ -267,7 +271,7 @@ func (s *Service) DispatchNotifications(ctx context.Context) error {
 		}
 		s.mu.Unlock()
 		if !found {
-			return nil
+			return firstErr
 		}
 
 		notification := Notification{
@@ -292,6 +296,9 @@ func (s *Service) DispatchNotifications(ctx context.Context) error {
 		if deliveryErr != nil {
 			current.Status = NotificationStatusFailed
 			current.LastError = deliveryErr.Error()
+			if firstErr == nil {
+				firstErr = deliveryErr
+			}
 		} else {
 			current.Status = NotificationStatusDelivered
 			current.LastError = ""
@@ -304,10 +311,6 @@ func (s *Service) DispatchNotifications(ctx context.Context) error {
 		}
 		s.notificationDeliveries[current.ID] = current
 		s.mu.Unlock()
-
-		if deliveryErr != nil {
-			return deliveryErr
-		}
 	}
 }
 
