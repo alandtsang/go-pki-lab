@@ -219,8 +219,6 @@ func (s *Service) reconcileAlertsLocked(target DeploymentTarget, currentStatus s
 	return s.ensureFiringAlertLocked(target, currentStatus, now, "alert bootstrapped from persisted monitoring state")
 }
 
-// alertType matches one exact type. A leading ! resolves every firing alert except that type.
-// An empty alertType resolves every firing alert for the target.
 func (s *Service) resolveFiringAlertsLocked(targetID, alertType string, now time.Time, message string) error {
 	for id, alert := range s.alerts {
 		if alert.TargetID != targetID || alert.Status != AlertStatusFiring {
@@ -244,6 +242,9 @@ func (s *Service) resolveFiringAlertsLocked(targetID, alertType string, now time
 			return err
 		}
 		s.alerts[id] = alert
+		if err := s.enqueueAlertNotificationsLocked(alert, NotificationEventResolved, now); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -277,5 +278,5 @@ func (s *Service) createFiringAlertLocked(target DeploymentTarget, alertType str
 		return err
 	}
 	s.alerts[alert.ID] = alert
-	return nil
+	return s.enqueueAlertNotificationsLocked(alert, NotificationEventFiring, now)
 }
