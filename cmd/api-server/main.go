@@ -30,10 +30,13 @@ func main() {
 	monitorTimeout := flag.Duration("monitor-timeout", 5*time.Second, "per-target TLS probe timeout")
 	monitorExpiryDays := flag.Int("monitor-expiring-before-days", 30, "certificate expiry warning window in days")
 	monitorExpiryLegacy := flag.Duration("monitor-expiring-before", 0, "deprecated: certificate expiry warning window as Go duration (for example 720h)")
+	notificationInterval := flag.Duration("notification-interval", 10*time.Second, "notification dispatcher interval; non-positive disables")
+	notificationWebhookURL := flag.String("notification-webhook-url", "", "optional webhook URL for alert notifications")
+	notificationWebhookTimeout := flag.Duration("notification-webhook-timeout", 5*time.Second, "webhook delivery timeout")
 	flag.Parse()
 
-	if *monitorTimeout <= 0 || *monitorExpiryDays < 0 || *monitorExpiryLegacy < 0 {
-		log.Fatal("invalid monitoring options")
+	if *monitorTimeout <= 0 || *monitorExpiryDays < 0 || *monitorExpiryLegacy < 0 || *notificationWebhookTimeout <= 0 {
+		log.Fatal("invalid monitoring or notification options")
 	}
 	monitorExpiry := time.Duration(*monitorExpiryDays) * 24 * time.Hour
 	if *monitorExpiryLegacy > 0 {
@@ -103,6 +106,25 @@ func main() {
 	if err := service.SetAlertRepository(alertRepository); err != nil {
 		log.Fatal(err)
 	}
+	notificationDeliveryRepository, err := persistence.NewNotificationDeliveryRepository(filepath.Join(*dataDir, "notification-deliveries"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := service.SetNotificationDeliveryRepository(notificationDeliveryRepository); err != nil {
+		log.Fatal(err)
+	}
+	if err := service.AddAlertSink(platform.LogAlertSink{}); err != nil {
+		log.Fatal(err)
+	}
+	if *notificationWebhookURL != "" {
+		webhookSink, err := platform.NewWebhookAlertSink("webhook", *notificationWebhookURL, *notificationWebhookTimeout)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := service.AddAlertSink(webhookSink); err != nil {
+			log.Fatal(err)
+		}
+	}
 
 	apiServer, err := api.NewServer(service, store, root.CertPEM)
 	if err != nil {
@@ -121,6 +143,10 @@ func main() {
 		log.Fatal(err)
 	}
 	incidentAPI, err := api.NewIncidentAPI(service)
+	if err != nil {
+		log.Fatal(err)
+	}
+	notificationAPI, err := api.NewNotificationAPI(service)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -173,6 +199,9 @@ func main() {
 	mux.Handle("GET /events", incidentAPI.Handler())
 	mux.Handle("GET /alerts", incidentAPI.Handler())
 	mux.Handle("GET /alerts/{id}", incidentAPI.Handler())
+	mux.Handle("GET /notification-deliveries", notificationAPI.Handler())
+	mux.Handle("GET /notification-deliveries/{id}", notificationAPI.Handler())
+	mux.Handle("POST /notification-dispatcher/run", notificationAPI.Handler())
 	mux.Handle("/", apiServer.Handler())
 
 	httpServer := &http.Server{
@@ -195,10 +224,15 @@ func main() {
 		fmt.Printf("Deployment jobs: %s\n", filepath.Join(*dataDir, "deployment-jobs"))
 		fmt.Printf("Events: %s\n", filepath.Join(*dataDir, "events"))
 		fmt.Printf("Alerts: %s\n", filepath.Join(*dataDir, "alerts"))
+		fmt.Printf("Notification deliveries: %s\n", filepath.Join(*dataDir, "notification-deliveries"))
 		fmt.Printf("Renewal scan interval: %s\n", renewalScanInterval.String())
 		fmt.Printf("Deployment scan interval: %s\n", deploymentScanInterval.String())
 		fmt.Printf("Monitoring interval: %s\n", monitorInterval.String())
 		fmt.Printf("Monitoring expiry warning: %s\n", monitorExpiry)
+		fmt.Printf("Notification interval: %s\n", notificationInterval.String())
+		if *notificationWebhookURL != "" {
+			fmt.Printf("Webhook notifications: enabled\n")
+		}
 		if created {
 			fmt.Printf("CA state: initialized new persistent CA\n")
 		} else {
@@ -217,6 +251,14 @@ func main() {
 		service.RunMonitoring(monitorCtx, *monitorInterval, monitorOptions, func(err error) { log.Printf("certificate monitor: %v", err) })
 	}()
 
+	notificationCtx, stopNotifications := context.WithCancel(context.Background())
+	defer stopNotifications()
+	notificationDone := make(chan struct{})
+	go func() {
+		defer close(notificationDone)
+		service.RunNotificationDispatcher(notificationCtx, *notificationInterval, func(err error) { log.Printf("notification dispatcher: %v", err) })
+	}()
+
 	go runRenewalScheduler(service, *renewalScanInterval)
 	go runDeploymentReconciler(service, *deploymentScanInterval)
 
@@ -224,7 +266,9 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 	stopMonitor()
+	stopNotifications()
 	<-monitorDone
+	<-notificationDone
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
