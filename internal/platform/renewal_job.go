@@ -25,6 +25,10 @@ type RenewalJob struct {
 	UpdatedAt           time.Time  `json:"updated_at"`
 	ClaimedAt           *time.Time `json:"claimed_at,omitempty"`
 	ClaimedBy           string     `json:"claimed_by,omitempty"`
+	HeartbeatAt         *time.Time `json:"heartbeat_at,omitempty"`
+	LeaseExpiresAt      *time.Time `json:"lease_expires_at,omitempty"`
+	Attempts            int        `json:"attempts"`
+	MaxAttempts         int        `json:"max_attempts"`
 	CompletedAt         *time.Time `json:"completed_at,omitempty"`
 	ResultSerial        string     `json:"result_serial,omitempty"`
 	LastError           string     `json:"last_error,omitempty"`
@@ -110,6 +114,15 @@ func (s *Service) ClaimRenewalJob(id, clientID string) (RenewalJob, error) {
 		return RenewalJob{}, fmt.Errorf("renewal job %q not found", id)
 	}
 	if job.Status == RenewalJobStatusRunning && job.ClaimedBy == clientID {
+		now := time.Now().UTC()
+		leaseExpiresAt := now.Add(s.jobLeaseDuration)
+		job.HeartbeatAt = &now
+		job.LeaseExpiresAt = &leaseExpiresAt
+		job.UpdatedAt = now
+		if err := s.renewalJobRepository.Save(job); err != nil {
+			return RenewalJob{}, err
+		}
+		s.renewalJobs[id] = job
 		return job, nil
 	}
 	if job.Status != RenewalJobStatusWaitingForClient {
@@ -120,9 +133,16 @@ func (s *Service) ClaimRenewalJob(id, clientID string) (RenewalJob, error) {
 	}
 
 	now := time.Now().UTC()
+	leaseExpiresAt := now.Add(s.jobLeaseDuration)
 	job.Status = RenewalJobStatusRunning
 	job.ClaimedBy = clientID
 	job.ClaimedAt = &now
+	job.HeartbeatAt = &now
+	job.LeaseExpiresAt = &leaseExpiresAt
+	job.Attempts++
+	if job.MaxAttempts <= 0 {
+		job.MaxAttempts = s.jobMaxAttempts
+	}
 	job.UpdatedAt = now
 	job.LastError = ""
 	if err := s.renewalJobRepository.Save(job); err != nil {
@@ -283,6 +303,7 @@ func (s *Service) ensureRenewalJob(decision RenewalDecision) (RenewalJob, bool, 
 		Status:          RenewalJobStatusWaitingForClient,
 		Reason:          decision.Reason,
 		RenewBeforeDays: decision.Policy.RenewBeforeDays,
+		MaxAttempts:     s.jobMaxAttempts,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
