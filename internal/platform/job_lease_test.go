@@ -76,6 +76,9 @@ func TestRenewalJobLeaseHeartbeatAndRecovery(t *testing.T) {
 	if err := service.SetRenewalJobRepository(repository); err != nil {
 		t.Fatal(err)
 	}
+	if err := service.SetDeploymentJobRepository(&leaseDeploymentRepository{jobs: map[string]DeploymentJob{}}); err != nil {
+		t.Fatal(err)
+	}
 
 	job, err := service.ClaimRenewalJob("renew-1", "executor-a")
 	if err != nil {
