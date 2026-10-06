@@ -122,7 +122,7 @@ running
 last_error = "lease expired after N attempt(s)"
 ```
 
-Explicit executor failures remain terminal failures. Phase 9.9 retries executor loss, not deterministic business errors.
+Explicit executor failures remain terminal failures. Phase 9.9 retries executor loss, not deterministic business errors. A job that exhausts max_attempts also blocks automatic recreation of the same renewal work or deployment target+serial; operator intervention is required before trying again.
 
 ## Manual crash test
 
