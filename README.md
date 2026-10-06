@@ -26,6 +26,12 @@ Phase 9  [in progress] Certificate platform capabilities
          9.1 [done] Domain certificate instance + current certificate selection
          9.2 [done] Persistent renewal policy + renewal decision
          9.3 [done] Renewal scheduler + persistent renewal jobs
+         9.4 [done] Client renewal executor + job lifecycle closure
+         9.5 [done] Deployment target + deployment executor + TLS verification
+         9.6 [done] Certificate monitoring + drift detection
+         9.7 [done] Event + alert lifecycle
+         9.8 [done] Notification delivery + log/webhook sinks
+         9.9 [in progress] Job lease + heartbeat + stale recovery
 ```
 
 ## Architecture
