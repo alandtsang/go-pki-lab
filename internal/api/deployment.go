@@ -38,6 +38,7 @@ func NewDeploymentAPIWithMonitoring(service *platform.Service, options platform.
 	api.mux.HandleFunc("GET /deployment-jobs", api.handleListJobs)
 	api.mux.HandleFunc("GET /deployment-jobs/{id}", api.handleGetJob)
 	api.mux.HandleFunc("POST /deployment-jobs/{id}/claim", api.handleClaimJob)
+	api.mux.HandleFunc("POST /deployment-jobs/{id}/heartbeat", api.handleHeartbeatJob)
 	api.mux.HandleFunc("POST /deployment-jobs/{id}/complete", api.handleCompleteJob)
 	api.mux.HandleFunc("POST /deployment-jobs/{id}/fail", api.handleFailJob)
 	return api, nil
@@ -139,6 +140,22 @@ func (a *DeploymentAPI) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job, err := a.service.ClaimDeploymentJob(r.PathValue("id"), req.ClientID)
+	if err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
+}
+
+func (a *DeploymentAPI) handleHeartbeatJob(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ClientID string `json:"client_id"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	job, err := a.service.HeartbeatDeploymentJob(r.PathValue("id"), req.ClientID)
 	if err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
