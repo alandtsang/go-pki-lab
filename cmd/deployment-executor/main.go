@@ -47,7 +47,11 @@ func main() {
 	ecc := flag.Bool("ecc", true, "use acme.sh ECC certificate directory")
 	sourceCert := flag.String("source-cert", "", "optional source full-chain PEM path")
 	sourceKey := flag.String("source-key", "", "optional source private key PEM path")
+	heartbeatInterval := flag.Duration("heartbeat-interval", 10*time.Second, "job heartbeat interval")
 	flag.Parse()
+	if *heartbeatInterval <= 0 {
+		log.Fatal("heartbeat-interval must be positive")
+	}
 
 	job, err := findWaitingJob(*apiBase, *domain)
 	if err != nil {
@@ -70,6 +74,8 @@ func main() {
 	if err := claimJob(*apiBase, job.ID, *clientID); err != nil {
 		log.Fatal(err)
 	}
+	stopHeartbeat := startHeartbeat(*apiBase, job.ID, *clientID, *heartbeatInterval)
+	defer stopHeartbeat()
 
 	certPath, keyPath, err := resolveSourcePaths(job.Domain, *ecc, *sourceCert, *sourceKey)
 	if err != nil {
@@ -232,6 +238,25 @@ func serialHex(cert *x509.Certificate) string {
 		return ""
 	}
 	return strings.ToUpper(hex.EncodeToString(cert.SerialNumber.Bytes()))
+}
+
+func startHeartbeat(apiBase, id, clientID string, interval time.Duration) func() {
+	stop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				if err := postJSON(strings.TrimRight(apiBase, "/")+"/deployment-jobs/"+id+"/heartbeat", map[string]string{"client_id": clientID}); err != nil {
+					log.Printf("deployment heartbeat failed: %v", err)
+				}
+			}
+		}
+	}()
+	return func() { close(stop) }
 }
 
 func claimJob(apiBase, id, clientID string) error {
