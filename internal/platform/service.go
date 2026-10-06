@@ -57,6 +57,8 @@ type Service struct {
 	notificationDeliveries         map[string]NotificationDelivery
 	notificationDeliveryRepository NotificationDeliveryRepository
 	alertSinks                     map[string]AlertSink
+	jobLeaseDuration               time.Duration
+	jobMaxAttempts                 int
 }
 
 func NewService(root, intermediate *ca.Authority, dnsServer string, repositories ...Repository) (*Service, error) {
@@ -82,6 +84,8 @@ func NewService(root, intermediate *ca.Authority, dnsServer string, repositories
 		alerts:                 make(map[string]Alert),
 		notificationDeliveries: make(map[string]NotificationDelivery),
 		alertSinks:             make(map[string]AlertSink),
+		jobLeaseDuration:       30 * time.Second,
+		jobMaxAttempts:         3,
 	}
 	if len(repositories) > 0 && repositories[0] != nil {
 		s.repository = repositories[0]
