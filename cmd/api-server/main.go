@@ -33,9 +33,12 @@ func main() {
 	notificationInterval := flag.Duration("notification-interval", 10*time.Second, "notification dispatcher interval; non-positive disables")
 	notificationWebhookURL := flag.String("notification-webhook-url", "", "optional webhook URL for alert notifications")
 	notificationWebhookTimeout := flag.Duration("notification-webhook-timeout", 5*time.Second, "webhook delivery timeout")
+	jobLeaseDuration := flag.Duration("job-lease-duration", 30*time.Second, "executor job lease duration")
+	jobMaxAttempts := flag.Int("job-max-attempts", 3, "maximum lease attempts before a stale job fails permanently")
+	jobRecoveryInterval := flag.Duration("job-recovery-interval", 10*time.Second, "stale job recovery interval; non-positive disables")
 	flag.Parse()
 
-	if *monitorTimeout <= 0 || *monitorExpiryDays < 0 || *monitorExpiryLegacy < 0 || *notificationWebhookTimeout <= 0 {
+	if *monitorTimeout <= 0 || *monitorExpiryDays < 0 || *monitorExpiryLegacy < 0 || *notificationWebhookTimeout <= 0 || *jobLeaseDuration <= 0 || *jobMaxAttempts <= 0 {
 		log.Fatal("invalid monitoring or notification options")
 	}
 	monitorExpiry := time.Duration(*monitorExpiryDays) * 24 * time.Hour
@@ -62,6 +65,9 @@ func main() {
 	}
 	service, err := platform.NewService(root, intermediate, dnsServer.Addr(), repository)
 	if err != nil {
+		log.Fatal(err)
+	}
+	if err := service.SetJobLeaseOptions(*jobLeaseDuration, *jobMaxAttempts); err != nil {
 		log.Fatal(err)
 	}
 	renewalPolicyRepository, err := persistence.NewRenewalPolicyRepository(filepath.Join(*dataDir, "renewal-policies"))
@@ -150,6 +156,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	jobRecoveryAPI, err := api.NewJobRecoveryAPI(service)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	acmeStateStore, err := acme.NewFileStateStore(filepath.Join(*dataDir, "acme", "state.json"))
 	if err != nil {
@@ -181,6 +191,7 @@ func main() {
 	mux.Handle("GET /renewal-jobs", renewalJobAPI.Handler())
 	mux.Handle("GET /renewal-jobs/{id}", renewalJobAPI.Handler())
 	mux.Handle("POST /renewal-jobs/{id}/claim", renewalJobAPI.Handler())
+	mux.Handle("POST /renewal-jobs/{id}/heartbeat", renewalJobAPI.Handler())
 	mux.Handle("POST /renewal-jobs/{id}/complete", renewalJobAPI.Handler())
 	mux.Handle("POST /renewal-jobs/{id}/fail", renewalJobAPI.Handler())
 	mux.Handle("GET /deployment-targets/{id}/monitoring", deploymentAPI.Handler())
@@ -194,6 +205,7 @@ func main() {
 	mux.Handle("GET /deployment-jobs", deploymentAPI.Handler())
 	mux.Handle("GET /deployment-jobs/{id}", deploymentAPI.Handler())
 	mux.Handle("POST /deployment-jobs/{id}/claim", deploymentAPI.Handler())
+	mux.Handle("POST /deployment-jobs/{id}/heartbeat", deploymentAPI.Handler())
 	mux.Handle("POST /deployment-jobs/{id}/complete", deploymentAPI.Handler())
 	mux.Handle("POST /deployment-jobs/{id}/fail", deploymentAPI.Handler())
 	mux.Handle("GET /events", incidentAPI.Handler())
@@ -202,6 +214,7 @@ func main() {
 	mux.Handle("GET /notification-deliveries", notificationAPI.Handler())
 	mux.Handle("GET /notification-deliveries/{id}", notificationAPI.Handler())
 	mux.Handle("POST /notification-dispatcher/run", notificationAPI.Handler())
+	mux.Handle("POST /job-recovery/run", jobRecoveryAPI.Handler())
 	mux.Handle("/", apiServer.Handler())
 
 	httpServer := &http.Server{
@@ -230,6 +243,9 @@ func main() {
 		fmt.Printf("Monitoring interval: %s\n", monitorInterval.String())
 		fmt.Printf("Monitoring expiry warning: %s\n", monitorExpiry)
 		fmt.Printf("Notification interval: %s\n", notificationInterval.String())
+		fmt.Printf("Job lease duration: %s\n", jobLeaseDuration.String())
+		fmt.Printf("Job max attempts: %d\n", *jobMaxAttempts)
+		fmt.Printf("Job recovery interval: %s\n", jobRecoveryInterval.String())
 		if *notificationWebhookURL != "" {
 			fmt.Printf("Webhook notifications: enabled\n")
 		}
@@ -259,6 +275,14 @@ func main() {
 		service.RunNotificationDispatcher(notificationCtx, *notificationInterval, func(err error) { log.Printf("notification dispatcher: %v", err) })
 	}()
 
+	jobRecoveryCtx, stopJobRecovery := context.WithCancel(context.Background())
+	defer stopJobRecovery()
+	jobRecoveryDone := make(chan struct{})
+	go func() {
+		defer close(jobRecoveryDone)
+		service.RunJobRecovery(jobRecoveryCtx, *jobRecoveryInterval, func(err error) { log.Printf("job recovery: %v", err) })
+	}()
+
 	go runRenewalScheduler(service, *renewalScanInterval)
 	go runDeploymentReconciler(service, *deploymentScanInterval)
 
@@ -267,8 +291,10 @@ func main() {
 	<-stop
 	stopMonitor()
 	stopNotifications()
+	stopJobRecovery()
 	<-monitorDone
 	<-notificationDone
+	<-jobRecoveryDone
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
