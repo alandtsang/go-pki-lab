@@ -248,7 +248,7 @@ func (s *Service) ensureDeploymentJob(target DeploymentTarget, serial string) (D
 		return DeploymentJob{}, false, fmt.Errorf("deployment job repository is not configured")
 	}
 	for _, job := range s.deploymentJobs {
-		if job.TargetID == target.ID && strings.EqualFold(job.CertificateSerial, serial) && (job.Status == DeploymentJobStatusWaitingForClient || job.Status == DeploymentJobStatusRunning || job.Status == DeploymentJobStatusCompleted) {
+		if job.TargetID == target.ID && strings.EqualFold(job.CertificateSerial, serial) && (job.Status == DeploymentJobStatusWaitingForClient || job.Status == DeploymentJobStatusRunning || job.Status == DeploymentJobStatusCompleted || (job.Status == DeploymentJobStatusFailed && job.MaxAttempts > 0 && job.Attempts >= job.MaxAttempts)) {
 			return job, false, nil
 		}
 	}
