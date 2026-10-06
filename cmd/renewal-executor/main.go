@@ -39,7 +39,11 @@ func main() {
 	clientID := flag.String("client-id", hostname(), "renewal executor client id")
 	domain := flag.String("domain", "", "optional domain filter")
 	ecc := flag.Bool("ecc", true, "pass --ecc to acme.sh")
+	heartbeatInterval := flag.Duration("heartbeat-interval", 10*time.Second, "job heartbeat interval")
 	flag.Parse()
+	if *heartbeatInterval <= 0 {
+		log.Fatal("heartbeat-interval must be positive")
+	}
 
 	job, err := findWaitingJob(*apiBase, *domain)
 	if err != nil {
@@ -52,6 +56,8 @@ func main() {
 	if err := claimJob(*apiBase, job.ID, *clientID); err != nil {
 		log.Fatal(err)
 	}
+	stopHeartbeat := startHeartbeat(*apiBase, job.ID, *clientID, *heartbeatInterval)
+	defer stopHeartbeat()
 
 	args := []string{"--renew", "--server", *acmeServer, "-d", job.Domain, "--force"}
 	if *ecc {
@@ -103,6 +109,25 @@ func findWaitingJob(apiBase, domain string) (*renewalJob, error) {
 		}
 	}
 	return nil, nil
+}
+
+func startHeartbeat(apiBase, id, clientID string, interval time.Duration) func() {
+	stop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				if err := postJSON(strings.TrimRight(apiBase, "/")+"/renewal-jobs/"+id+"/heartbeat", map[string]string{"client_id": clientID}, nil); err != nil {
+					log.Printf("renewal heartbeat failed: %v", err)
+				}
+			}
+		}
+	}()
+	return func() { close(stop) }
 }
 
 func claimJob(apiBase, id, clientID string) error {
