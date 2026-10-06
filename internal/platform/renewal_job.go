@@ -287,7 +287,7 @@ func (s *Service) ensureRenewalJob(decision RenewalDecision) (RenewalJob, bool, 
 		return RenewalJob{}, false, fmt.Errorf("renewal job repository is not configured")
 	}
 	for _, job := range s.renewalJobs {
-		if job.Domain == domain && (job.Status == RenewalJobStatusWaitingForClient || job.Status == RenewalJobStatusRunning) {
+		if job.Domain == domain && (job.Status == RenewalJobStatusWaitingForClient || job.Status == RenewalJobStatusRunning || (job.Status == RenewalJobStatusFailed && job.MaxAttempts > 0 && job.Attempts >= job.MaxAttempts)) {
 			return job, false, nil
 		}
 	}
