@@ -22,6 +22,7 @@ func NewRenewalJobAPI(service *platform.Service) (*RenewalJobAPI, error) {
 	api.mux.HandleFunc("GET /renewal-jobs", api.handleListJobs)
 	api.mux.HandleFunc("GET /renewal-jobs/{id}", api.handleGetJob)
 	api.mux.HandleFunc("POST /renewal-jobs/{id}/claim", api.handleClaimJob)
+	api.mux.HandleFunc("POST /renewal-jobs/{id}/heartbeat", api.handleHeartbeatJob)
 	api.mux.HandleFunc("POST /renewal-jobs/{id}/complete", api.handleCompleteJob)
 	api.mux.HandleFunc("POST /renewal-jobs/{id}/fail", api.handleFailJob)
 	return api, nil
@@ -60,6 +61,20 @@ func (a *RenewalJobAPI) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job, err := a.service.ClaimRenewalJob(r.PathValue("id"), req.ClientID)
+	if err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
+}
+
+func (a *RenewalJobAPI) handleHeartbeatJob(w http.ResponseWriter, r *http.Request) {
+	var req struct{ ClientID string `json:"client_id"` }
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	job, err := a.service.HeartbeatRenewalJob(r.PathValue("id"), req.ClientID)
 	if err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
