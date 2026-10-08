@@ -31,10 +31,63 @@ Phase 9  [in progress] Certificate platform capabilities
          9.6 [done] Certificate monitoring + drift detection
          9.7 [done] Event + alert lifecycle
          9.8 [done] Notification delivery + log/webhook sinks
-         9.9 [in progress] Job lease + heartbeat + stale recovery
+         9.9 [done] Job lease + heartbeat + stale recovery
 ```
 
-## Architecture
+## Visual architecture guide
+
+These diagrams provide five complementary views of the project. A good reading order is:
+
+```text
+Overall Architecture
+  -> ACME DNS-01 Sequence
+  -> Certificate Lifecycle
+  -> Platform Automation Loop
+  -> Job Lease / Recovery
+```
+
+### Overall architecture
+
+This is the highest-level view of `go-pki-lab`: clients enter through the API server, the platform service coordinates PKI, ACME, DNS, persistence, and the certificate automation layer.
+
+![go-pki-lab architecture overview](docs/images/architecture-overview.svg)
+
+### Certificate lifecycle
+
+This diagram follows one certificate from client-generated CSR through validation, issuance, deployment, monitoring, renewal, revocation, and history.
+
+![certificate lifecycle](docs/images/certificate-lifecycle.svg)
+
+### ACME DNS-01 issuance sequence
+
+The ACME client owns the private key. The server returns a DNS-01 challenge, the client publishes the TXT record, the ACME server validates it through the local DNS server, and only the CSR public key is sent to the CA for signing.
+
+![ACME DNS-01 sequence](docs/images/acme-dns01-sequence.svg)
+
+### Certificate platform automation loop
+
+Phase 9 adds a certificate control plane above issuance: renewal and deployment form one side of the loop; monitoring, incident state, and notifications form the other.
+
+![certificate platform automation loop](docs/images/platform-automation-loop.svg)
+
+### Job lease, heartbeat, and stale recovery
+
+Renewal and deployment executors are replaceable workers. The server owns job state and uses leases plus heartbeats to detect a crashed executor and requeue stale work.
+
+![job lease and recovery](docs/images/job-lease-recovery.svg)
+
+The SVG source files are stored under:
+
+```text
+docs/images/
+├── architecture-overview.svg
+├── certificate-lifecycle.svg
+├── acme-dns01-sequence.svg
+├── platform-automation-loop.svg
+└── job-lease-recovery.svg
+```
+
+## Architecture (text reference)
 
 ```text
                          go-pki-lab :8080
