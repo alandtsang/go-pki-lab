@@ -38,11 +38,11 @@ type CertificateHistoryItem struct {
 // CurrentCertificate is the newest currently usable certificate, while History
 // retains every issued generation for audit and lifecycle decisions.
 type DomainCertificateInstance struct {
-	Domain             string                    `json:"domain"`
-	Status             string                    `json:"status"`
-	CurrentCertificate *CertificateHistoryItem   `json:"current_certificate"`
-	HistoryCount       int                       `json:"history_count"`
-	History            []CertificateHistoryItem  `json:"history"`
+	Domain             string                   `json:"domain"`
+	Status             string                   `json:"status"`
+	CurrentCertificate *CertificateHistoryItem  `json:"current_certificate"`
+	HistoryCount       int                      `json:"history_count"`
+	History            []CertificateHistoryItem `json:"history"`
 }
 
 // CertificateStateSource exposes certificates issued outside platform Orders.

@@ -55,7 +55,9 @@ func (a *RenewalJobAPI) handleGetJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *RenewalJobAPI) handleClaimJob(w http.ResponseWriter, r *http.Request) {
-	var req struct{ ClientID string `json:"client_id"` }
+	var req struct {
+		ClientID string `json:"client_id"`
+	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -69,7 +71,9 @@ func (a *RenewalJobAPI) handleClaimJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *RenewalJobAPI) handleHeartbeatJob(w http.ResponseWriter, r *http.Request) {
-	var req struct{ ClientID string `json:"client_id"` }
+	var req struct {
+		ClientID string `json:"client_id"`
+	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -83,7 +87,9 @@ func (a *RenewalJobAPI) handleHeartbeatJob(w http.ResponseWriter, r *http.Reques
 }
 
 func (a *RenewalJobAPI) handleCompleteJob(w http.ResponseWriter, r *http.Request) {
-	var req struct{ ResultSerial string `json:"result_serial"` }
+	var req struct {
+		ResultSerial string `json:"result_serial"`
+	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -97,7 +103,9 @@ func (a *RenewalJobAPI) handleCompleteJob(w http.ResponseWriter, r *http.Request
 }
 
 func (a *RenewalJobAPI) handleFailJob(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Error string `json:"error"` }
+	var req struct {
+		Error string `json:"error"`
+	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

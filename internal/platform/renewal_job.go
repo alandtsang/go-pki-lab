@@ -15,23 +15,23 @@ const (
 )
 
 type RenewalJob struct {
-	ID                  string     `json:"id"`
-	Domain              string     `json:"domain"`
-	Status              string     `json:"status"`
-	Reason              string     `json:"reason"`
-	SourceSerial        string     `json:"source_serial,omitempty"`
-	RenewBeforeDays     int        `json:"renew_before_days"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
-	ClaimedAt           *time.Time `json:"claimed_at,omitempty"`
-	ClaimedBy           string     `json:"claimed_by,omitempty"`
-	HeartbeatAt         *time.Time `json:"heartbeat_at,omitempty"`
-	LeaseExpiresAt      *time.Time `json:"lease_expires_at,omitempty"`
-	Attempts            int        `json:"attempts"`
-	MaxAttempts         int        `json:"max_attempts"`
-	CompletedAt         *time.Time `json:"completed_at,omitempty"`
-	ResultSerial        string     `json:"result_serial,omitempty"`
-	LastError           string     `json:"last_error,omitempty"`
+	ID              string     `json:"id"`
+	Domain          string     `json:"domain"`
+	Status          string     `json:"status"`
+	Reason          string     `json:"reason"`
+	SourceSerial    string     `json:"source_serial,omitempty"`
+	RenewBeforeDays int        `json:"renew_before_days"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	ClaimedAt       *time.Time `json:"claimed_at,omitempty"`
+	ClaimedBy       string     `json:"claimed_by,omitempty"`
+	HeartbeatAt     *time.Time `json:"heartbeat_at,omitempty"`
+	LeaseExpiresAt  *time.Time `json:"lease_expires_at,omitempty"`
+	Attempts        int        `json:"attempts"`
+	MaxAttempts     int        `json:"max_attempts"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+	ResultSerial    string     `json:"result_serial,omitempty"`
+	LastError       string     `json:"last_error,omitempty"`
 }
 
 type RenewalScanResult struct {
