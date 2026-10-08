@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620">
+  <defs>
+    <marker id="arrj" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#475569"/></marker>
+    <style>.title{font:700 28px Arial,sans-serif;fill:#0f172a}.h{font:700 17px Arial,sans-serif;fill:#0f172a}.t{font:13px Arial,sans-serif;fill:#475569}.b{fill:#fff;stroke:#94a3b8;stroke-width:1.5}.g{fill:#f8fafc;stroke:#cbd5e1;stroke-width:1.5}.l{stroke:#475569;stroke-width:2;fill:none;marker-end:url(#arrj)}</style>
+  </defs>
+  <rect width="1200" height="620" fill="#fff"/>
+  <text x="600" y="45" text-anchor="middle" class="title">Job Lease / Heartbeat / Stale Recovery</text>
+
+  <rect x="80" y="115" width="260" height="96" rx="14" class="b"/>
+  <text x="210" y="150" text-anchor="middle" class="h">waiting_for_client</text>
+  <text x="210" y="178" text-anchor="middle" class="t">Ready to be claimed</text>
+
+  <rect x="470" y="115" width="260" height="96" rx="14" class="b"/>
+  <text x="600" y="150" text-anchor="middle" class="h">running</text>
+  <text x="600" y="176" text-anchor="middle" class="t">claimed_by + lease_expires_at</text>
+  <text x="600" y="197" text-anchor="middle" class="t">attempts += 1</text>
+
+  <rect x="860" y="115" width="260" height="96" rx="14" class="b"/>
+  <text x="990" y="150" text-anchor="middle" class="h">completed / failed</text>
+  <text x="990" y="178" text-anchor="middle" class="t">Terminal state</text>
+
+  <path d="M340 163 H470" class="l"/><text x="405" y="148" text-anchor="middle" class="t">claim</text>
+  <path d="M730 163 H860" class="l"/><text x="795" y="148" text-anchor="middle" class="t">finish</text>
+
+  <rect x="420" y="285" width="360" height="90" rx="14" class="g"/>
+  <text x="600" y="318" text-anchor="middle" class="h">Heartbeat</text>
+  <text x="600" y="345" text-anchor="middle" class="t">heartbeat_at = now</text>
+  <text x="600" y="365" text-anchor="middle" class="t">lease_expires_at = now + lease</text>
+  <path d="M600 211 V285" class="l"/>
+  <path d="M780 330 H825 V163 H730" class="l"/>
+
+  <rect x="420" y="445" width="360" height="100" rx="14" class="g"/>
+  <text x="600" y="478" text-anchor="middle" class="h">Recovery Scheduler</text>
+  <text x="600" y="505" text-anchor="middle" class="t">Detects missing heartbeat / expired lease</text>
+  <text x="600" y="527" text-anchor="middle" class="t">attempts &lt; max → requeue; else → failed</text>
+
+  <path d="M600 211 V445" class="l"/>
+  <path d="M420 500 H210 V211" class="l"/>
+  <text x="300" y="485" text-anchor="middle" class="t">requeue</text>
+  <path d="M780 500 H990 V211" class="l"/>
+  <text x="895" y="485" text-anchor="middle" class="t">max attempts exhausted</text>
+
+  <text x="600" y="590" text-anchor="middle" class="t">The server owns job state; executors are replaceable workers.</text>
+</svg>
