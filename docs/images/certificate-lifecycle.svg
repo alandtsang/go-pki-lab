@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="480" viewBox="0 0 1400 480">
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#475569"/></marker>
+    <style>.title{font:700 28px Arial,sans-serif;fill:#0f172a}.h{font:700 17px Arial,sans-serif;fill:#0f172a}.t{font:13px Arial,sans-serif;fill:#475569}.b{fill:#fff;stroke:#94a3b8;stroke-width:1.5}.l{stroke:#475569;stroke-width:2;fill:none;marker-end:url(#a)}</style>
+  </defs>
+  <rect width="1400" height="480" fill="#fff"/>
+  <text x="700" y="45" text-anchor="middle" class="title">Certificate Lifecycle in go-pki-lab</text>
+  <g>
+    <rect x="35" y="110" width="145" height="92" rx="14" class="b"/><text x="107" y="145" text-anchor="middle" class="h">1. CSR</text><text x="107" y="172" text-anchor="middle" class="t">Client key + CSR</text>
+    <rect x="210" y="110" width="145" height="92" rx="14" class="b"/><text x="282" y="145" text-anchor="middle" class="h">2. Order</text><text x="282" y="172" text-anchor="middle" class="t">Request cert</text>
+    <rect x="385" y="110" width="145" height="92" rx="14" class="b"/><text x="457" y="145" text-anchor="middle" class="h">3. DNS-01</text><text x="457" y="172" text-anchor="middle" class="t">TXT ownership proof</text>
+    <rect x="560" y="110" width="145" height="92" rx="14" class="b"/><text x="632" y="145" text-anchor="middle" class="h">4. Issue</text><text x="632" y="172" text-anchor="middle" class="t">CA signs CSR</text>
+    <rect x="735" y="110" width="145" height="92" rx="14" class="b"/><text x="807" y="145" text-anchor="middle" class="h">5. Deploy</text><text x="807" y="172" text-anchor="middle" class="t">HTTPS target</text>
+    <rect x="910" y="110" width="145" height="92" rx="14" class="b"/><text x="982" y="145" text-anchor="middle" class="h">6. Monitor</text><text x="982" y="172" text-anchor="middle" class="t">Serial / TLS / expiry</text>
+    <rect x="1085" y="110" width="145" height="92" rx="14" class="b"/><text x="1157" y="145" text-anchor="middle" class="h">7. Decide</text><text x="1157" y="172" text-anchor="middle" class="t">Renewal window</text>
+  </g>
+  <g class="l"><path d="M180 156 H210"/><path d="M355 156 H385"/><path d="M530 156 H560"/><path d="M705 156 H735"/><path d="M880 156 H910"/><path d="M1055 156 H1085"/></g>
+  <path d="M1157 202 V290 H632" class="l"/>
+  <rect x="560" y="290" width="145" height="92" rx="14" class="b"/><text x="632" y="325" text-anchor="middle" class="h">8. Renew</text><text x="632" y="352" text-anchor="middle" class="t">Rotate certificate</text>
+  <rect x="385" y="290" width="145" height="92" rx="14" class="b"/><text x="457" y="325" text-anchor="middle" class="h">9. Revoke</text><text x="457" y="352" text-anchor="middle" class="t">CRL / OCSP</text>
+  <rect x="210" y="290" width="145" height="92" rx="14" class="b"/><text x="282" y="325" text-anchor="middle" class="h">10. History</text><text x="282" y="352" text-anchor="middle" class="t">All generations</text>
+  <path d="M560 336 H530" class="l"/><path d="M385 336 H355" class="l"/>
+  <path d="M632 382 V430 H807 V202" class="l"/>
+  <text x="700" y="455" text-anchor="middle" class="t">Renewal creates a new certificate generation, deploys it, then monitoring continues on the new current certificate.</text>
+</svg>
