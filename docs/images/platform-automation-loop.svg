@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="760" viewBox="0 0 1300 760">
+  <defs>
+    <marker id="ar" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#475569"/></marker>
+    <style>.title{font:700 28px Arial,sans-serif;fill:#0f172a}.h{font:700 17px Arial,sans-serif;fill:#0f172a}.t{font:13px Arial,sans-serif;fill:#475569}.b{fill:#fff;stroke:#94a3b8;stroke-width:1.5}.bg{fill:#f8fafc;stroke:#cbd5e1;stroke-width:1.5}.l{stroke:#475569;stroke-width:2;fill:none;marker-end:url(#ar)}</style>
+  </defs>
+  <rect width="1300" height="760" fill="#fff"/>
+  <text x="650" y="46" text-anchor="middle" class="title">Phase 9 Certificate Platform Automation Loop</text>
+
+  <rect x="60" y="95" width="540" height="590" rx="18" class="bg"/>
+  <text x="330" y="130" text-anchor="middle" class="h">Renewal &amp; Deployment Plane</text>
+  <g>
+    <rect x="165" y="165" width="330" height="58" rx="12" class="b"/><text x="330" y="190" text-anchor="middle" class="h">Certificate Instance</text><text x="330" y="210" text-anchor="middle" class="t">Current Certificate + History</text>
+    <rect x="165" y="265" width="330" height="58" rx="12" class="b"/><text x="330" y="300" text-anchor="middle" class="h">Renewal Policy + Decision</text>
+    <rect x="165" y="365" width="330" height="58" rx="12" class="b"/><text x="330" y="390" text-anchor="middle" class="h">Renewal Job</text><text x="330" y="410" text-anchor="middle" class="t">Lease / Heartbeat / Recovery</text>
+    <rect x="165" y="465" width="330" height="58" rx="12" class="b"/><text x="330" y="490" text-anchor="middle" class="h">ACME Renewal</text><text x="330" y="510" text-anchor="middle" class="t">New certificate serial</text>
+    <rect x="165" y="565" width="330" height="58" rx="12" class="b"/><text x="330" y="590" text-anchor="middle" class="h">Deployment Job</text><text x="330" y="610" text-anchor="middle" class="t">Install + TLS verify</text>
+    <path d="M330 223 V265" class="l"/><path d="M330 323 V365" class="l"/><path d="M330 423 V465" class="l"/><path d="M330 523 V565" class="l"/>
+  </g>
+
+  <rect x="700" y="95" width="540" height="590" rx="18" class="bg"/>
+  <text x="970" y="130" text-anchor="middle" class="h">Monitoring &amp; Incident Plane</text>
+  <g>
+    <rect x="805" y="165" width="330" height="58" rx="12" class="b"/><text x="970" y="190" text-anchor="middle" class="h">TLS Probe</text><text x="970" y="210" text-anchor="middle" class="t">Observe online certificate</text>
+    <rect x="805" y="265" width="330" height="58" rx="12" class="b"/><text x="970" y="290" text-anchor="middle" class="h">Monitoring State</text><text x="970" y="310" text-anchor="middle" class="t">healthy / mismatch / expiring / unreachable</text>
+    <rect x="805" y="365" width="330" height="58" rx="12" class="b"/><text x="970" y="400" text-anchor="middle" class="h">Event</text>
+    <rect x="805" y="465" width="330" height="58" rx="12" class="b"/><text x="970" y="490" text-anchor="middle" class="h">Alert Lifecycle</text><text x="970" y="510" text-anchor="middle" class="t">firing ↔ resolved</text>
+    <rect x="805" y="565" width="330" height="58" rx="12" class="b"/><text x="970" y="590" text-anchor="middle" class="h">Notification Delivery</text><text x="970" y="610" text-anchor="middle" class="t">Log / Webhook + retry</text>
+    <path d="M970 223 V265" class="l"/><path d="M970 323 V365" class="l"/><path d="M970 423 V465" class="l"/><path d="M970 523 V565" class="l"/>
+  </g>
+
+  <path d="M495 594 H650 V194 H805" class="l"/>
+  <text x="650" y="180" text-anchor="middle" class="t">Deployed certificate becomes monitored state</text>
+  <path d="M805 294 H650 V194 H495" class="l"/>
+  <text x="650" y="280" text-anchor="middle" class="t">Drift feeds lifecycle decisions</text>
+  <text x="650" y="722" text-anchor="middle" class="t">Together these two planes form the closed-loop certificate control plane.</text>
+</svg>
