@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="820" viewBox="0 0 1200 820">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#475569"/></marker>
+    <style>
+      .title{font:700 28px Arial,sans-serif;fill:#0f172a}.h{font:700 18px Arial,sans-serif;fill:#0f172a}.t{font:14px Arial,sans-serif;fill:#475569}.box{fill:#fff;stroke:#94a3b8;stroke-width:1.5}.layer{fill:#f8fafc;stroke:#cbd5e1;stroke-width:1.5}.line{stroke:#475569;stroke-width:2;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="820" fill="#ffffff"/>
+  <text x="600" y="48" text-anchor="middle" class="title">go-pki-lab Architecture Overview</text>
+
+  <rect x="370" y="80" width="460" height="72" rx="14" class="box"/>
+  <text x="600" y="110" text-anchor="middle" class="h">Clients</text>
+  <text x="600" y="135" text-anchor="middle" class="t">acme.sh / curl / Renewal Executor / Deployment Executor</text>
+
+  <path d="M600 152 V190" class="line"/>
+  <rect x="300" y="190" width="600" height="90" rx="16" class="layer"/>
+  <text x="600" y="220" text-anchor="middle" class="h">API Server :8080</text>
+  <text x="600" y="247" text-anchor="middle" class="t">Certificate Platform API + ACME RFC 8555 API + Monitoring / Alert / Recovery APIs</text>
+
+  <path d="M600 280 V325" class="line"/>
+  <rect x="330" y="325" width="540" height="82" rx="16" class="box"/>
+  <text x="600" y="357" text-anchor="middle" class="h">Certificate Platform Service</text>
+  <text x="600" y="382" text-anchor="middle" class="t">Orders, certificate state, lifecycle, jobs, deployment, monitoring, alerts</text>
+
+  <path d="M600 407 V450" class="line"/>
+  <path d="M600 450 H180 V485" class="line"/>
+  <path d="M600 450 V485" class="line"/>
+  <path d="M600 450 H1020 V485" class="line"/>
+
+  <rect x="60" y="485" width="240" height="110" rx="14" class="box"/>
+  <text x="180" y="520" text-anchor="middle" class="h">PKI / CA</text>
+  <text x="180" y="548" text-anchor="middle" class="t">Root CA</text>
+  <text x="180" y="570" text-anchor="middle" class="t">Intermediate CA</text>
+
+  <rect x="470" y="485" width="260" height="110" rx="14" class="box"/>
+  <text x="600" y="520" text-anchor="middle" class="h">ACME Engine</text>
+  <text x="600" y="548" text-anchor="middle" class="t">Account / Order / Authz</text>
+  <text x="600" y="570" text-anchor="middle" class="t">DNS-01 / Finalize / Revoke</text>
+
+  <rect x="900" y="485" width="240" height="110" rx="14" class="box"/>
+  <text x="1020" y="520" text-anchor="middle" class="h">Local DNS</text>
+  <text x="1020" y="548" text-anchor="middle" class="t">127.0.0.1:1053</text>
+  <text x="1020" y="570" text-anchor="middle" class="t">_acme-challenge TXT</text>
+
+  <path d="M180 595 V645" class="line"/>
+  <path d="M600 595 V645" class="line"/>
+  <path d="M1020 595 V645" class="line"/>
+
+  <rect x="60" y="645" width="240" height="105" rx="14" class="layer"/>
+  <text x="180" y="680" text-anchor="middle" class="h">Certificate Lifecycle</text>
+  <text x="180" y="708" text-anchor="middle" class="t">Renew / Revoke</text>
+  <text x="180" y="730" text-anchor="middle" class="t">CRL / OCSP / History</text>
+
+  <rect x="470" y="645" width="260" height="105" rx="14" class="layer"/>
+  <text x="600" y="680" text-anchor="middle" class="h">Persistent State</text>
+  <text x="600" y="708" text-anchor="middle" class="t">data/ca, orders, acme</text>
+  <text x="600" y="730" text-anchor="middle" class="t">jobs, alerts, deliveries</text>
+
+  <rect x="900" y="645" width="240" height="105" rx="14" class="layer"/>
+  <text x="1020" y="680" text-anchor="middle" class="h">Platform Automation</text>
+  <text x="1020" y="708" text-anchor="middle" class="t">Renewal / Deployment</text>
+  <text x="1020" y="730" text-anchor="middle" class="t">Monitoring / Alert / Recovery</text>
+
+  <text x="600" y="795" text-anchor="middle" class="t">Client-owned private keys stay outside the API server.</text>
+</svg>
